@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DataPrep Studio</title>
+  <style>
+    :root {
+      --ink: #17211c;
+      --muted: #5d6b63;
+      --line: #d9e2dc;
+      --paper: #f3f6f4;
+      --card: #ffffff;
+      --accent: #0c6b4d;
+      --accent-soft: #e7f5ef;
+      --warn: #8a4b08;
+      --bad: #8f2d2d;
+      --side: #12211b;
+      --side-ink: #e7f0eb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", Candara, sans-serif; color: var(--ink); background: var(--paper); }
+    button, input, select { font: inherit; color: inherit; }
+    button { border: 0; background: var(--accent); color: white; border-radius: 999px; padding: 10px 16px; cursor: pointer; }
+    button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    input, select { border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; background: white; }
+    .app { display: grid; grid-template-columns: 250px 1fr; min-height: 100vh; }
+    aside { background: var(--side); color: var(--side-ink); padding: 22px 18px; }
+    aside h1 { font-family: Georgia, serif; font-weight: 500; font-size: 26px; margin: 0 0 6px; }
+    aside p { color: #b7c7be; font-size: 13px; line-height: 1.45; }
+    .pipe { list-style: none; padding: 0; margin: 22px 0 0; }
+    .pipe li { display: flex; gap: 10px; align-items: center; padding: 8px 0; color: #8ea399; font-size: 13px; }
+    .pipe li.on { color: white; }
+    .dot { width: 8px; height: 8px; border-radius: 99px; background: #3d564b; }
+    .pipe li.on .dot { background: #8ddec0; }
+    main { padding: 22px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 14px; }
+    h2 { margin: 0 0 8px; font-size: 18px; }
+    .muted { color: var(--muted); line-height: 1.45; }
+    .drop { border: 1.5px dashed #b7c7be; border-radius: 16px; min-height: 240px; display: grid; place-items: center; text-align: center; background: white; cursor: pointer; padding: 28px; }
+    .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+    .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+    .stat { background: #f6faf8; border-radius: 12px; padding: 12px; }
+    .stat b { display: block; font-family: Georgia, serif; font-size: 24px; }
+    .stat span { color: var(--muted); font-size: 12px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+    .tabs button { background: white; color: var(--ink); border: 1px solid var(--line); }
+    .tabs button.on { background: var(--ink); color: white; border-color: var(--ink); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    th { color: var(--muted); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; position: sticky; top: 0; background: white; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .scroll { overflow: auto; max-height: 460px; border: 1px solid var(--line); border-radius: 12px; }
+    .bar { height: 8px; background: #e6eeea; border-radius: 99px; overflow: hidden; min-width: 90px; }
+    .bar i { display: block; height: 100%; background: #c4554a; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip { background: var(--accent-soft); color: #0c4d38; border-radius: 999px; padding: 3px 8px; font-size: 12px; }
+    .grid2 { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 14px; }
+    .feature { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: #fbfefc; }
+    .feature label { display: flex; gap: 8px; align-items: center; color: var(--ink); font-size: 14px; }
+    label.field { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+    .warn { color: var(--warn); }
+    .error { background: #fdecec; color: var(--bad); border-radius: 12px; padding: 12px 14px; }
+    .ok { color: var(--accent); font-weight: 650; }
+    pre { background: #12211b; color: #e7f0eb; border-radius: 12px; padding: 14px; overflow: auto; max-height: 320px; font-size: 12px; }
+    .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .compare .stat { min-height: 78px; }
+    a.dl { text-decoration: none; }
+    @media (max-width: 980px) {
+      .app { grid-template-columns: 1fr; }
+      aside { padding-bottom: 8px; }
+      .stats, .grid2, .compare { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <h1>DataPrep Studio</h1>
+      <p>Inspect a CSV, edit every cleaning rule, then export a train set whose statistics were fit only on train.</p>
+      <ol class="pipe" id="pipe">
+        <li data-pipe="profile"><span class="dot"></span>Profile the file</li>
+        <li data-pipe="rules"><span class="dot"></span>Suggest and edit rules</li>
+        <li data-pipe="clean"><span class="dot"></span>Rename, drop, engineer</li>
+        <li data-pipe="split"><span class="dot"></span>Split before any statistic</li>
+        <li data-pipe="fit"><span class="dot"></span>Impute and clip on train</li>
+        <li data-pipe="encode"><span class="dot"></span>Encode and scale</li>
+        <li data-pipe="export"><span class="dot"></span>Download CSV and script</li>
+      </ol>
+    </aside>
+    <main>
+      <section id="upload-view">
+        <div class="drop" id="drop">
+          <div>
+            <h2>Drop a CSV here</h2>
+            <p class="muted">The first pass only reads the file and proposes rules. Nothing is fit until you press run.</p>
+            <div class="row" style="justify-content: center;">
+              <button type="button" id="choose">Choose CSV</button>
+              <button id="sample" class="ghost" type="button">Use sample CSV</button>
+              <label class="field">Advisor
+                <select id="mode">
+                  <option value="heuristic" selected>Heuristic</option>
+                  <option value="llm">LLM</option>
+                </select>
+              </label>
+              <input id="file" type="file" accept=".csv,text/csv" hidden />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="review-view" hidden>
+        <div class="tabs">
+          <button type="button" class="on" data-tab="inspect">Inspect</button>
+          <button type="button" data-tab="rules">Rules</button>
+        </div>
+        <div id="inspect-panel">
+          <div class="card"><div class="stats" id="stats"></div></div>
+          <div class="grid2">
+            <div class="card">
+              <h2>Missing values</h2>
+              <div class="scroll" id="missing"></div>
+            </div>
+            <div class="card">
+              <h2>Categories</h2>
+              <div class="scroll" id="categories"></div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Numeric describe</h2>
+            <div class="scroll"><table id="describe"></table></div>
+          </div>
+          <div class="card">
+            <h2>Sample rows</h2>
+            <div class="scroll"><table id="sample-table"></table></div>
+          </div>
+        </div>
+        <div id="rules-panel" hidden>
+          <div class="card">
+            <h2>Split</h2>
+            <p class="muted">The split happens after structural cleaning and before medians, modes, IQR bounds, and the scaler.</p>
+            <div class="row">
+              <label class="field">Target<select id="target"></select></label>
+              <label class="field">Test size<input id="test-size" type="number" min="0.05" max="0.5" step="0.05" value="0.2" /></label>
+              <label class="field">Random state<input id="seed" type="number" value="42" /></label>
+              <label class="field" style="color: var(--ink);"><span>Holdout</span><span class="row"><input id="no-split" type="checkbox" /> Keep one dataset</span></label>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Feature engineering</h2>
+            <div class="grid2" id="features"></div>
+          </div>
+          <div class="card">
+            <h2>Column rules</h2>
+            <p class="muted">Rename is applied first. Fill, outliers, encoding, and scaling use the renamed column. Dropped columns and the target are left out of those steps.</p>
+            <div class="scroll"><table id="rules"></table></div>
+            <p id="plan" class="muted"></p>
+            <div class="row">
+              <button id="run" type="button">Run pipeline</button>
+              <button id="back" class="ghost" type="button">Upload another file</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="results-view" hidden>
+        <div class="card">
+          <h2>Before and after</h2>
+          <div class="compare" id="compare"></div>
+          <p id="ready" class="ok"></p>
+          <div class="row">
+            <a class="dl" id="dl-train" href="#"><button type="button">Download train CSV</button></a>
+            <a class="dl" id="dl-test" href="#"><button type="button">Download test CSV</button></a>
+            <a class="dl" id="dl-script" href="#"><button class="ghost" type="button">Download Python script</button></a>
+            <button id="another" class="ghost" type="button">Upload another file</button>
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="card">
+            <h2>Fit on train only</h2>
+            <div class="scroll" id="fitted"></div>
+          </div>
+          <div class="card">
+            <h2>Output columns</h2>
+            <div class="scroll" id="outputs"></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Train preview</h2>
+          <div class="scroll"><table id="preview"></table></div>
+        </div>
+        <div class="card">
+          <h2>Python that was run</h2>
+          <pre id="script"></pre>
+        </div>
+      </section>
+      <p class="error" id="error" hidden></p>
+    </main>
+  </div>
+  <script>
+    const state = { sessionId: null, profile: null, config: null, originals: [] };
+    const uploadView = document.querySelector("#upload-view");
+    const reviewView = document.querySelector("#review-view");
+    const resultsView = document.querySelector("#results-view");
+    const errorBox = document.querySelector("#error");
+    const drop = document.querySelector("#drop");
+    const fileInput = document.querySelector("#file");
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    }
+    function showError(message) {
+      errorBox.hidden = !message;
+      errorBox.textContent = message || "";
+    }
+    function toSnake(name) {
+      return String(name).trim().replace(/[\s-]+/g, "_").replace(/[^0-9A-Za-z_]/g, "").replace(/_+/g, "_").replace(/^_|_$/g, "").toLowerCase();
+    }
+    function setPipe(doneUntil) {
+      const order = ["profile", "rules", "clean", "split", "fit", "encode", "export"];
+      const limit = order.indexOf(doneUntil);
+      document.querySelectorAll("#pipe li").forEach((item) => {
+        item.classList.toggle("on", order.indexOf(item.dataset.pipe) <= limit);
+      });
+    }
+    function table(el, rows) {
+      if (!rows || !rows.length) { el.innerHTML = "<tr><td>No rows</td></tr>"; return; }
+      const keys = Object.keys(rows[0]);
+      el.innerHTML = "<thead><tr>" + keys.map((key) => `<th>${esc(key)}</th>`).join("") + "</tr></thead><tbody>" +
+        rows.map((row) => "<tr>" + keys.map((key) => `<td>${esc(row[key])}</td>`).join("") + "</tr>").join("") + "</tbody>";
+    }
+    async function readError(response) {
+      const text = await response.text();
+      try { const body = JSON.parse(text); return body.detail || text; } catch { return text || response.statusText; }
+    }
+    function metaBySnake() {
+      const map = {};
+      Object.entries(state.profile.columns || {}).forEach(([original, meta]) => { map[toSnake(original)] = { original, meta }; });
+      return map;
+    }
+    function fmt(value) {
+      if (value === null || value === undefined || value === "") return "";
+      const number = Number(value);
+      if (Number.isFinite(number) && String(value).trim() !== "") return Math.abs(number) >= 1000 || Number.isInteger(number) ? String(Math.round(number * 1000) / 1000) : number.toFixed(3);
+      return String(value);
+    }
+
+    function renderInspect() {
+      const profile = state.profile;
+      const shape = profile.shape || [0, 0];
+      const columns = Object.entries(profile.columns || {});
+      const numericCount = Object.keys(profile.numeric_stats || {}).length;
+      const textCount = Object.keys(profile.categorical_stats || {}).length;
+      document.querySelector("#stats").innerHTML = [
+        [shape[0], "Rows"], [shape[1], "Columns"], [profile.duplicates_count ?? 0, "Duplicate rows"],
+        [profile.total_nulls ?? 0, "Missing cells"], [numericCount, "Numeric columns"], [textCount, "Text columns"]
+      ].map(([value, label]) => `<div class="stat"><b>${esc(value)}</b><span>${esc(label)}</span></div>`).join("");
+
+      const missing = columns.map(([name, meta]) => ({ name, pct: Number(meta.null_pct || 0), count: meta.null_count ?? "" }))
+        .sort((a, b) => b.pct - a.pct);
+      document.querySelector("#missing").innerHTML = "<table><tbody>" + missing.map((item) =>
+        `<tr><td>${esc(item.name)}</td><td class="num">${esc(fmt(item.pct))}%</td><td><div class="bar"><i style="width:${Math.min(item.pct, 100)}%"></i></div></td></tr>`
+      ).join("") + "</tbody></table>";
+
+      const categories = Object.entries(profile.categorical_stats || {});
+      document.querySelector("#categories").innerHTML = categories.length ? categories.map(([name, stat]) =>
+        `<p><b>${esc(name)}</b> <span class="muted">${esc(stat.unique)} distinct, top ${esc(stat.top)} (${esc(stat.freq)})</span></p><div class="chips">${(stat.categories || []).map((item) => `<span class="chip">${esc(item)}</span>`).join("")}</div>`
+      ).join("") : "<p class='muted'>No text columns.</p>";
+
+      const described = Object.entries(profile.numeric_stats || {}).map(([name, stat]) => ({
+        column: name, count: fmt(stat.count), mean: fmt(stat.mean), std: fmt(stat.std), min: fmt(stat.min),
+        p25: fmt(stat["25%"]), median: fmt(stat["50%"]), p75: fmt(stat["75%"]), max: fmt(stat.max), skew: fmt(stat.skew)
+      }));
+      table(document.querySelector("#describe"), described);
+      table(document.querySelector("#sample-table"), profile.sample_rows || []);
+    }
+
+    function renderRules() {
+      const config = state.config;
+      const bySnake = metaBySnake();
+      state.originals = Object.keys(bySnake);
+      const target = document.querySelector("#target");
+      target.innerHTML = state.originals.map((name) => `<option value="${esc(name)}">${esc(bySnake[name].original)}</option>`).join("");
+      target.value = config.target_column || state.originals[0] || "";
+      document.querySelector("#test-size").value = config.test_size ?? 0.2;
+      document.querySelector("#seed").value = config.random_state ?? 42;
+      document.querySelector("#no-split").checked = config.test_size == null;
+
+      const features = config.feature_engineering || {};
+      const featureCopy = {
+        extract_title_from_name: ["Title from name", "Reads a title between the comma and the period, then drops name."],
+        create_family_size: ["Family size", "siblings + parents + 1. Needs sibsp and parch."],
+        create_is_alone: ["Is alone", "1 when family size is 1."]
+      };
+      document.querySelector("#features").innerHTML = Object.keys(featureCopy).map((name) =>
+        `<div class="feature"><label><input type="checkbox" data-feature="${esc(name)}" ${features[name] ? "checked" : ""}/> ${esc(featureCopy[name][0])}</label><p class="muted">${esc(featureCopy[name][1])}</p></div>`
+      ).join("");
+
+      const dropped = new Set(config.drop_columns || []);
+      const binary = config.encoding?.binary_map || {};
+      const oneHot = new Set(config.encoding?.one_hot || []);
+      const scale = new Set(config.scaling?.columns || []);
+      const header = ["Column", "Null %", "Unique", "Keep", "Rename", "Text", "Cast", "Fill", "Group by", "Outliers", "Encode", "Scale"];
+      const body = state.originals.map((name) => {
+        const meta = bySnake[name].meta;
+        const kind = meta.skew === undefined ? "text" : "number";
+        const fill = (config.imputation || {})[name] || {};
+        const outlier = (config.outliers || {})[name] || {};
+        const encode = binary[name] ? "binary" : oneHot.has(name) ? "one_hot" : "none";
+        return `<tr data-col="${esc(name)}">
+          <td><b>${esc(bySnake[name].original)}</b><div class="muted">${esc(kind)}</div></td>
+          <td class="num">${esc(fmt(meta.null_pct))}</td>
+          <td class="num">${esc(meta.unique ?? "")}</td>
+          <td><select data-role><option value="keep" ${dropped.has(name) ? "" : "selected"}>Keep</option><option value="drop" ${dropped.has(name) ? "selected" : ""}>Drop</option></select></td>
+          <td><input data-rename value="${esc((config.rename_map || {})[name] || name)}" size="12" /></td>
+          <td><select data-text><option value="">None</option>${["lower_strip", "upper_strip", "strip"].map((how) => `<option ${((config.string_cleaning || {})[name] === how) ? "selected" : ""}>${esc(how)}</option>`).join("")}</select></td>
+          <td><input data-cast type="checkbox" ${(config.type_casting || {})[name] === "numeric" ? "checked" : ""} /></td>
+          <td><select data-fill>${["none", "median", "mode", "grouped_median"].map((how) => `<option value="${how}" ${(fill.strategy || "none") === how ? "selected" : ""}>${esc(how)}</option>`).join("")}</select></td>
+          <td><input data-group value="${esc((fill.group_by || []).join(", "))}" size="14" placeholder="pclass, sex" /></td>
+          <td><select data-out>${["none", "log1p", "iqr_clip"].map((how) => `<option value="${how}" ${(outlier.strategy || "none") === how ? "selected" : ""}>${esc(how)}</option>`).join("")}</select></td>
+          <td><select data-enc>${[["none", "None"], ["binary", "Binary 0/1"], ["one_hot", "One-hot"]].map(([value, label]) => `<option value="${value}" ${encode === value ? "selected" : ""}>${label}</option>`).join("")}</select></td>
+          <td><input data-scale type="checkbox" ${scale.has(name) || scale.has(`${name}_log`) ? "checked" : ""} /></td>
+        </tr>`;
+      }).join("");
+      document.querySelector("#rules").innerHTML = "<thead><tr>" + header.map((item) => `<th>${item}</th>`).join("") + "</tr></thead><tbody>" + body + "</tbody>";
+      updatePlan();
+    }
+
+    function finalName(original) {
+      const input = document.querySelector(`[data-col="${CSS.escape(original)}"] [data-rename]`);
+      return toSnake(input && input.value ? input.value : original) || original;
+    }
+    function binaryFrom(original) {
+      const existing = (state.config.encoding?.binary_map || {})[original];
+      if (existing && Object.keys(existing).length) return existing;
+      const meta = metaBySnake()[original].meta;
+      const cats = (meta.categories || []).map((value) => String(value).trim().toLowerCase()).filter(Boolean);
+      if (cats.length >= 2) return { [cats[0]]: 0, [cats[1]]: 1 };
+      return { no: 0, yes: 1 };
+    }
+    function collectConfig() {
+      const features = {};
+      document.querySelectorAll("#features input").forEach((input) => { features[input.dataset.feature] = input.checked; });
+      const rename = {};
+      const drops = [];
+      const stringCleaning = {};
+      const typeCasting = {};
+      const imputation = {};
+      const outliers = {};
+      const binary = {};
+      const oneHot = [];
+      const scale = [];
+      const target = finalName(document.querySelector("#target").value);
+      document.querySelectorAll("#rules tbody tr").forEach((row) => {
+        const original = row.dataset.col;
+        const name = finalName(original);
+        if (name !== original) rename[original] = name;
+        if (row.querySelector("[data-role]").value === "drop") { drops.push(name); return; }
+        if (name === target) return;
+        const text = row.querySelector("[data-text]").value;
+        if (text) stringCleaning[name] = text;
+        if (row.querySelector("[data-cast]").checked) typeCasting[name] = "numeric";
+        const fill = row.querySelector("[data-fill]").value;
+        if (fill !== "none") {
+          const spec = { strategy: fill };
+          if (fill === "grouped_median") spec.group_by = row.querySelector("[data-group]").value.split(",").map(toSnake).filter(Boolean);
+          imputation[name] = spec;
+        }
+        const outlier = row.querySelector("[data-out]").value;
+        if (outlier === "log1p") outliers[name] = { strategy: "log1p", new_col: `${name}_log` };
+        if (outlier === "iqr_clip") outliers[name] = { strategy: "iqr_clip", factor: 1.5 };
+        const encode = row.querySelector("[data-enc]").value;
+        if (encode === "binary") binary[name] = binaryFrom(original);
+        if (encode === "one_hot") oneHot.push(name);
+        if (row.querySelector("[data-scale]").checked && outlier !== "log1p") scale.push(name);
+        if (row.querySelector("[data-scale]").checked && outlier === "log1p") scale.push(`${name}_log`);
+      });
+      if (features.extract_title_from_name) {
+        oneHot.push("title");
+        imputation.title = imputation.title || { strategy: "mode" };
+      }
+      if (features.create_family_size) scale.push("family_size");
+      return {
+        target_column: target,
+        test_size: document.querySelector("#no-split").checked ? null : Number(document.querySelector("#test-size").value),
+        random_state: Number(document.querySelector("#seed").value) || 42,
+        rename_map: rename,
+        drop_columns: drops,
+        type_casting: typeCasting,
+        string_cleaning: stringCleaning,
+        feature_engineering: features,
+        imputation,
+        outliers,
+        encoding: { binary_map: binary, one_hot: [...new Set(oneHot)] },
+        scaling: { method: "standard", columns: [...new Set(scale)] }
+      };
+    }
+    function updatePlan() {
+      const config = collectConfig();
+      const notes = [];
+      if (config.feature_engineering.extract_title_from_name && !state.originals.includes("name")) notes.push("Title extraction needs a name column.");
+      if ((config.feature_engineering.create_family_size || config.feature_engineering.create_is_alone) && !(state.originals.includes("sibsp") && state.originals.includes("parch"))) notes.push("Family features need sibsp and parch.");
+      Object.entries(config.imputation).forEach(([name, spec]) => {
+        if (spec.strategy === "grouped_median" && !(spec.group_by || []).length) notes.push(`${name} grouped median needs group columns.`);
+      });
+      const targetOriginal = document.querySelector("#target").value;
+      document.querySelectorAll("#rules tbody tr").forEach((row) => {
+        const locked = row.dataset.col === targetOriginal || row.querySelector("[data-role]").value === "drop";
+        row.querySelectorAll("input, select").forEach((el) => {
+          if (el.matches("[data-role], [data-rename]")) return;
+          el.disabled = locked;
+        });
+      });
+      document.querySelector("#plan").innerHTML = `Will drop ${config.drop_columns.length}, fill ${Object.keys(config.imputation).length}, encode ${Object.keys(config.encoding.binary_map).length + config.encoding.one_hot.length}, scale ${config.scaling.columns.length}. ${config.test_size == null ? "No holdout." : `Hold out ${config.test_size}.`}` +
+        (notes.length ? `<br><span class="warn">${esc(notes.join(" "))}</span>` : "");
+    }
+
+    function renderReview() {
+      renderInspect();
+      renderRules();
+      uploadView.hidden = true;
+      reviewView.hidden = false;
+      resultsView.hidden = true;
+      setPipe("rules");
+    }
+
+    function renderResults(report) {
+      const beforeShape = report.before_shape || state.profile.shape || [];
+      const beforeNulls = report.before_nulls ?? state.profile.total_nulls;
+      const beforeCols = report.before_column_count || (state.profile.shape || [])[1];
+      const afterCols = (report.output_columns || []).length || (report.train_shape || [])[1];
+      document.querySelector("#compare").innerHTML = `
+        <div class="stat"><b>${esc((beforeShape || []).join(" × "))}</b><span>Before, rows × columns</span></div>
+        <div class="stat"><b>${esc((report.train_shape || []).join(" × "))}</b><span>Train after cleaning</span></div>
+        <div class="stat"><b>${esc(beforeNulls)}</b><span>Missing cells before</span></div>
+        <div class="stat"><b>${esc(report.total_nulls_remaining)}</b><span>Missing cells in train</span></div>
+        <div class="stat"><b>${esc(beforeCols)}</b><span>Columns before</span></div>
+        <div class="stat"><b>${esc(report.test_shape ? report.test_shape.join(" × ") : "—")}</b><span>Test after cleaning</span></div>`;
+      document.querySelector("#ready").textContent = report.all_numeric_verified && report.total_nulls_remaining === 0
+        ? "Train is numeric and has no missing values. Medians, bounds, and scaler means came from the train split."
+        : "Train still needs a look before modeling.";
+      document.querySelector("#dl-train").href = report.train_csv_url;
+      const testLink = document.querySelector("#dl-test");
+      testLink.hidden = !report.test_csv_url;
+      testLink.href = report.test_csv_url || "#";
+      document.querySelector("#dl-script").href = `/api/export/${state.sessionId}/script`;
+
+      const fitted = report.fitted_stats || {};
+      const imputeRows = Object.entries(fitted.imputation || {}).map(([name, spec]) => {
+        if (spec.strategy === "grouped_median") return `<tr><td>${esc(name)}</td><td>grouped median</td><td>${esc(Object.keys(spec.group_medians || {}).length)} groups by ${esc((spec.group_by || []).join(", "))}</td></tr>`;
+        return `<tr><td>${esc(name)}</td><td>${esc(spec.strategy)}</td><td>${esc(spec.value)}</td></tr>`;
+      });
+      const outlierRows = Object.entries(fitted.outliers || {}).map(([name, spec]) =>
+        `<tr><td>${esc(name)}</td><td>${esc(spec.strategy)}</td><td>${spec.lower !== undefined ? esc(fmt(spec.lower)) + " to " + esc(fmt(spec.upper)) : esc(spec.new_col || "")}</td></tr>`
+      );
+      const scaler = fitted.scaler || {};
+      const scaleRows = (scaler.columns || []).map((name, index) =>
+        `<tr><td>${esc(name)}</td><td>standard</td><td>mean ${esc(fmt((scaler.mean || [])[index]))}, scale ${esc(fmt((scaler.scale || [])[index]))}</td></tr>`
+      );
+      document.querySelector("#fitted").innerHTML = "<table><thead><tr><th>Column</th><th>Fit</th><th>Train value</th></tr></thead><tbody>" +
+        (imputeRows.concat(outlierRows, scaleRows).join("") || "<tr><td>Nothing was fit.</td></tr>") + "</tbody></table>";
+      document.querySelector("#outputs").innerHTML = "<div class='chips'>" + (report.output_columns || []).map((name) => `<span class="chip">${esc(name)}</span>`).join("") + "</div>";
+      table(document.querySelector("#preview"), report.preview_rows || []);
+      document.querySelector("#script").textContent = report.python_script || "";
+      reviewView.hidden = true;
+      resultsView.hidden = false;
+      setPipe("export");
+    }
+
+    async function uploadFile(file) {
+      showError("");
+      if (!file) return;
+      const body = new FormData();
+      body.append("file", file);
+      const mode = document.querySelector("#mode").value;
+      drop.querySelector("h2").textContent = "Reading the file…";
+      const response = await fetch(`/api/upload?advisor_mode=${mode}`, { method: "POST", body });
+      drop.querySelector("h2").textContent = "Drop a CSV here";
+      if (!response.ok) { showError(await readError(response)); return; }
+      const payload = await response.json();
+      state.sessionId = payload.session_id;
+      state.profile = payload.initial_profile;
+      state.config = payload.cleaning_config;
+      renderReview();
+    }
+    async function runPipeline() {
+      showError("");
+      const button = document.querySelector("#run");
+      button.disabled = true;
+      const config = collectConfig();
+      const response = await fetch(`/api/process/${state.sessionId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config)
+      });
+      button.disabled = false;
+      if (!response.ok) { showError(await readError(response)); return; }
+      state.config = config;
+      renderResults(await response.json());
+    }
+    function resetUpload() {
+      reviewView.hidden = true;
+      resultsView.hidden = true;
+      uploadView.hidden = false;
+      setPipe("profile");
+      showError("");
+    }
+
+    document.querySelectorAll(".tabs button").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".tabs button").forEach((item) => item.classList.toggle("on", item === button));
+        document.querySelector("#inspect-panel").hidden = button.dataset.tab !== "inspect";
+        document.querySelector("#rules-panel").hidden = button.dataset.tab !== "rules";
+      });
+    });
+    document.querySelector("#choose").addEventListener("click", (event) => { event.stopPropagation(); fileInput.click(); });
+    drop.addEventListener("click", (event) => { if (event.target.closest("button, select, label")) return; fileInput.click(); });
+    drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (event) => { event.preventDefault(); drop.classList.remove("over"); uploadFile(event.dataTransfer.files[0]); });
+    fileInput.addEventListener("change", () => uploadFile(fileInput.files[0]));
+    document.querySelector("#sample").addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const response = await fetch("/sample.csv");
+      uploadFile(new File([await response.blob()], "sample.csv", { type: "text/csv" }));
+    });
+    ["#rules", "#target", "#test-size", "#seed", "#no-split", "#features"].forEach((selector) => {
+      document.querySelector(selector).addEventListener("input", () => { if (state.profile) updatePlan(); });
+      document.querySelector(selector).addEventListener("change", () => { if (state.profile) updatePlan(); });
+    });
+    document.querySelector("#run").addEventListener("click", runPipeline);
+    document.querySelector("#back").addEventListener("click", resetUpload);
+    document.querySelector("#another").addEventListener("click", resetUpload);
+    setPipe("profile");
+  </script>
+</body>
+</html>
