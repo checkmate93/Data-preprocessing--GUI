@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://data-preprocessing-gui.onrender.com/api/$1"
+    }
+  ]
+}
