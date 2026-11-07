@@ -97,6 +97,20 @@ def __run(code):
     out["seconds"] = round(time.perf_counter() - started, 3)
     return json.dumps(out, default=str)
 
+def __export(name):
+    value = __ns.get(name)
+    if not isinstance(value, pd.DataFrame):
+        raise ValueError(f"Η μεταβλητή '{name}' δεν είναι DataFrame.")
+    value = value.copy()
+    value.columns = [str(c) for c in value.columns]
+    original = __ns.get("df_original")
+    return json.dumps({
+        "csv": value.to_csv(index=False),
+        "dtypes": {c: str(t) for c, t in value.dtypes.items()},
+        "changed": not (isinstance(original, pd.DataFrame) and value.equals(original)),
+        "shape": list(value.shape),
+    })
+
 def __csv(name):
     value = __ns.get(name)
     if isinstance(value, pd.Series):
@@ -132,6 +146,8 @@ self.onmessage = async (event: MessageEvent<WorkerIn>) => {
       post({ type: "result", id: message.id, ...result });
     } else if (message.type === "csv") {
       post({ type: "csv", id: message.id, csv: pyodide.globals.get("__csv")(message.name) });
+    } else if (message.type === "export") {
+      post({ type: "export", id: message.id, ...JSON.parse(pyodide.globals.get("__export")(message.name)) });
     }
   } catch (error) {
     post({ type: "error", id: "id" in message ? message.id : undefined, error: String((error as Error)?.message ?? error) });

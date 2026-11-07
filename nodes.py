@@ -194,7 +194,8 @@ class SaveVersionNode(Node):
             shared["recipe"].append({
                 "step": step,
                 "op": spec.id,
-                "label": f"Βοηθός: {description}" if spec.category == "assistant" and description else spec.label,
+                "label": (f"{'Python' if spec.id.startswith('browser.') else 'Βοηθός'}: {description}"
+                          if spec.category == "assistant" and description else spec.label),
                 "params": p["params"].model_dump(mode="json"),
                 "code": p["output"]["code"],
                 "summary": p["output"]["output"].message,

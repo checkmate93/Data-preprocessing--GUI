@@ -97,7 +97,7 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
   display: grid;
   grid-template-columns: 270px minmax(0, 1fr) 250px;
   grid-template-rows: auto minmax(0, 1fr);
-  height: 100vh;
+  height: calc(100vh - var(--tabbar-h));
 }
 .topbar {
   grid-column: 1 / -1;
@@ -108,7 +108,37 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 700; color: var(--primary); }
+.brand { font-weight: 700; color: var(--primary); white-space: nowrap; }
+
+/* ---------- tabs (one dataset per tab) ---------- */
+:root { --tabbar-h: 40px; }
+.tabbar {
+  height: var(--tabbar-h); display: flex; align-items: flex-end; gap: 12px; padding: 0 12px;
+  background: var(--panel-2); border-bottom: 1px solid var(--border);
+}
+.tabbar .brand { align-self: center; }
+.tabs { display: flex; align-items: flex-end; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.tab {
+  display: flex; align-items: center; max-width: 220px; min-width: 110px; height: 32px;
+  border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted);
+}
+.tab:hover { background: var(--panel); }
+.tab.active { background: var(--bg); border-color: var(--border); color: var(--text); margin-bottom: -1px; height: 33px; }
+.tab-title {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 100%;
+  border: 0; background: none; padding: 0 4px 0 12px; cursor: pointer; font-size: 13px; color: inherit;
+}
+.tab-title > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab.active .tab-title { font-weight: 600; }
+.tab-close { border: 0; background: none; color: var(--muted); cursor: pointer; border-radius: 4px; width: 22px; height: 22px; margin-right: 6px; font-size: 11px; }
+.tab-close:hover { background: var(--border); color: var(--text); }
+.tab-add { border: 0; background: none; font-size: 18px; width: 30px; height: 30px; border-radius: 6px; cursor: pointer; color: var(--muted); margin-bottom: 1px; }
+.tab-add:hover:not(:disabled) { background: var(--panel); color: var(--text); }
+.tab-add:disabled { opacity: 0.4; cursor: default; }
+.dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); flex: none; }
+.close-all { align-self: center; }
+.tab-pane.hidden { display: none; }
+.shell > .alert { margin: 8px 16px; }
 .file-info { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; }
 .file-info b { overflow: hidden; text-overflow: ellipsis; }
 .topbar-actions { display: flex; gap: 8px; align-items: center; }
@@ -340,7 +370,7 @@ legend { font-weight: 500; padding: 0 4px; }
 .btn.active { background: var(--primary-soft); border-color: var(--primary); }
 .btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
 .chat {
-  position: fixed; top: 49px; right: 0; bottom: 0; width: min(460px, 100vw); z-index: 40;
+  position: fixed; top: calc(var(--tabbar-h) + 49px); right: 0; bottom: 0; width: min(460px, 100vw); z-index: 40;
   background: var(--panel); border-left: 1px solid var(--border); box-shadow: var(--shadow);
   display: flex; flex-direction: column;
 }
@@ -383,12 +413,14 @@ legend { font-weight: 500; padding: 0 4px; }
 
 /* ---------- Python (Pyodide) panel ---------- */
 .py-panel {
-  position: fixed; top: 49px; right: 0; bottom: 0; width: min(780px, 100vw); z-index: 40;
+  position: fixed; top: calc(var(--tabbar-h) + 49px); right: 0; bottom: 0; width: min(780px, 100vw); z-index: 40;
   background: var(--panel); border-left: 1px solid var(--border); box-shadow: var(--shadow);
   display: flex; flex-direction: column;
 }
 .py-panel.hidden { display: none; }
 .py-note { margin: 8px 12px 0; }
+.py-save { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+.py-save input { flex: 1; min-width: 200px; }
 .py-output { flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 12px; }
 .py-cell { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
 .py-code { margin: 0; color: var(--muted); max-height: 120px; }

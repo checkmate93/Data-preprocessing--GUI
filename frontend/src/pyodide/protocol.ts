@@ -25,11 +25,19 @@ export interface RunResult {
   seconds: number;
 }
 
+export interface ExportedFrame {
+  csv: string;
+  dtypes: Record<string, string>;
+  changed: boolean; // differs from df_original (what came from the server)
+  shape: [number, number];
+}
+
 export type WorkerIn =
   | { type: "init" }
   | { type: "load"; id: number; csv: string; hints: LoadHints }
   | { type: "run"; id: number; code: string }
-  | { type: "csv"; id: number; name: string };
+  | { type: "csv"; id: number; name: string }
+  | { type: "export"; id: number; name: string };
 
 export type WorkerOut =
   | { type: "status"; text: string }
@@ -37,4 +45,5 @@ export type WorkerOut =
   | { type: "loaded"; id: number; shape: [number, number] }
   | ({ type: "result"; id: number } & RunResult)
   | { type: "csv"; id: number; csv: string }
+  | ({ type: "export"; id: number } & ExportedFrame)
   | { type: "error"; id?: number; error: string };

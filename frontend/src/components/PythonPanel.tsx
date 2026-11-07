@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, saveBlob } from "../api";
+import { api, saveBlob, type StateWithResult } from "../api";
 import { PYODIDE_VERSION, type LoadHints, type RunResult } from "../pyodide/protocol";
 import { PythonRuntime } from "../pyodide/runtime";
 import type { Profile } from "../types";
@@ -12,6 +12,10 @@ interface Props {
   filename: string;
   open: boolean;
   onClose: () => void;
+  /** Upload the local df as a new server version; resolves with the server's answer (not yet applied). */
+  onSave: (payload: { csv: string; dtypes: Record<string, string>; code: string; description: string; baseVersion: number }) => Promise<StateWithResult>;
+  /** Apply that answer to the app (called in the same tick as the panel's own update). */
+  onSaved: (data: StateWithResult) => void;
 }
 
 interface Cell {
@@ -48,7 +52,9 @@ function hintsFrom(profile: Profile): LoadHints {
   };
 }
 
-export function PythonPanel({ sessionId, version, profile, filename, open, onClose }: Props) {
+export function PythonPanel({ sessionId, version, profile, filename, open, onClose, onSave, onSaved }: Props) {
+  const codeLog = useRef<string[]>([]); // cells that ran without error since the data was loaded
+  const [saving, setSaving] = useState<string | null>(null); // description being edited, null = form closed
   const [status, setStatus] = useState("");
   const runtime = useRef<PythonRuntime | null>(null);
   if (!runtime.current) runtime.current = new PythonRuntime(setStatus);
@@ -85,6 +91,7 @@ export function PythonPanel({ sessionId, version, profile, filename, open, onClo
       if (!response.ok) throw new Error(`Τα δεδομένα δεν κατέβηκαν (${response.status}).`);
       const csv = await response.text();
       const shape = await runtime.current!.load(csv, hintsFrom(profile));
+      codeLog.current = [];
       setLocalShape(shape);
       setLoadedKey(key);
       return true;
@@ -112,6 +119,7 @@ export function PythonPanel({ sessionId, version, profile, filename, open, onClo
     try {
       cell.result = await runtime.current!.run(code);
       if (cell.result.df_shape) setLocalShape(cell.result.df_shape);
+      if (!cell.result.error) codeLog.current.push(code.trim());
     } catch (error) {
       cell.error = (error as Error).message;
     } finally {
@@ -128,6 +136,38 @@ export function PythonPanel({ sessionId, version, profile, filename, open, onClo
     setLoadedKey(null);
     setLocalShape(null);
     setProblem("Η Python σταμάτησε· οι μεταβλητές χάθηκαν. Πάτα «Εκτέλεση» για να ξαναφορτωθούν τα δεδομένα.");
+  }
+
+  async function saveVersion(description: string) {
+    if (!loadedKey) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      setStatus("Αποστολή του df στον server…");
+      const frame = await runtime.current!.exportFrame("df");
+      if (!frame.changed) {
+        setProblem("Το df δεν διαφέρει από τη v" + loadedKey.split(":")[1] + " — δεν χρειάζεται νέα έκδοση.");
+        return;
+      }
+      const data = await onSave({
+        csv: frame.csv,
+        dtypes: frame.dtypes,
+        code: codeLog.current.join("\n\n"),
+        description: description.trim() || "Κώδικας Python από τον browser",
+        baseVersion: Number(loadedKey.split(":")[1]),
+      });
+      // The local df IS the new version: mark it loaded so the panel does not download it again.
+      await runtime.current!.run("df_original = df.copy()");
+      codeLog.current = [];
+      setLoadedKey(`${sessionId}:${data.history.current_version}`);
+      onSaved(data);
+      setSaving(null);
+    } catch (error) {
+      setProblem((error as Error).message);
+    } finally {
+      setStatus("");
+      setBusy(false);
+    }
   }
 
   async function downloadDf() {
@@ -156,14 +196,26 @@ export function PythonPanel({ sessionId, version, profile, filename, open, onClo
             Επαναφόρτωση v{version}
           </button>
           <button className="btn small" disabled={busy || !loadedKey} onClick={downloadDf}>Λήψη df (CSV)</button>
+          <button className="btn small primary" disabled={busy || !loadedKey || stale} onClick={() => setSaving("")}
+            title={stale ? "Ο server έχει νεότερη έκδοση — επαναφόρτωσε πρώτα" : "Το df γίνεται νέα έκδοση στον server (με αναίρεση)"}>
+            Αποθήκευση ως νέα έκδοση
+          </button>
           <button className="icon-btn" onClick={onClose} aria-label="Κλείσιμο">✕</button>
         </div>
       </header>
 
+      {saving !== null && (
+        <form className="py-save" onSubmit={(e) => { e.preventDefault(); saveVersion(saving); }}>
+          <input autoFocus placeholder="Περιγραφή (π.χ. «φύλο σε 1/0»)" value={saving} onChange={(e) => setSaving(e.target.value)} maxLength={200} />
+          <button className="btn primary" disabled={busy}>Αποθήκευση</button>
+          <button type="button" className="btn ghost" onClick={() => setSaving(null)}>Άκυρο</button>
+          <span className="muted small">Ο κώδικας που έτρεξε ({codeLog.current.length} κελιά) μπαίνει στο pipeline.py.</span>
+        </form>
+      )}
       {stale && <div className="alert warn py-note">Τα δεδομένα στον server άλλαξαν σε v{version}. Το τοπικό df είναι από παλαιότερη έκδοση.</div>}
       <div className="py-note muted small">
-        Οι αλλαγές στο <code>df</code> μένουν στον browser· για να τις κρατήσεις κατέβασε το CSV. Διαθέσιμα: pandas, numpy,
-        statsmodels, scikit-learn, scipy, matplotlib (φορτώνονται όταν τα κάνεις import). <code>df_original</code> = όπως ήρθε από τον server.
+        Οι αλλαγές στο <code>df</code> μένουν στον browser μέχρι να πατήσεις «Αποθήκευση ως νέα έκδοση» ή «Λήψη df». Διαθέσιμα:
+        pandas, numpy, statsmodels, scikit-learn, scipy, matplotlib (φορτώνονται όταν τα κάνεις import). <code>df_original</code> = όπως ήρθε από τον server.
       </div>
 
       <div className="py-output" ref={output}>

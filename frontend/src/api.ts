@@ -71,6 +71,16 @@ export const api = {
 
   fileUrl: (id: string, name: string) => `${base(id)}/files/${encodeURIComponent(name)}`,
 
+  saveBrowserVersion: (id: string, payload: { csv: string; dtypes: Record<string, string>; code: string; description: string; baseVersion: number }) => {
+    const form = new FormData();
+    form.append("file", new Blob([payload.csv], { type: "text/csv" }), "df.csv");
+    form.append("base_version", String(payload.baseVersion));
+    form.append("code", payload.code);
+    form.append("description", payload.description);
+    form.append("dtypes", JSON.stringify(payload.dtypes));
+    return request<StateWithResult>(`${base(id)}/browser-version`, { method: "POST", body: form });
+  },
+
   assistantStatus: () => request<AssistantStatus>("/api/assistant/status"),
   chat: (id: string) => request<ChatState>(`${base(id)}/chat`),
   sendChat: (id: string, message: string, token: string) =>

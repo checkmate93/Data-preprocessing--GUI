@@ -3,7 +3,7 @@
  * and stop() = terminate the worker (the only reliable way to interrupt a running loop
  * without SharedArrayBuffer / cross-origin isolation headers).
  */
-import type { LoadHints, RunResult, WorkerIn, WorkerOut } from "./protocol";
+import type { ExportedFrame, LoadHints, RunResult, WorkerIn, WorkerOut } from "./protocol";
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
@@ -48,6 +48,11 @@ export class PythonRuntime {
     return (await this.request({ type: "csv", id: 0, name })) as string;
   }
 
+  async exportFrame(name: string): Promise<ExportedFrame> {
+    await this.start();
+    return (await this.request({ type: "export", id: 0, name })) as ExportedFrame;
+  }
+
   /** Kill the worker (stops infinite loops). Variables are lost; the next call starts a fresh one. */
   stop() {
     this.worker?.terminate();
@@ -77,6 +82,10 @@ export class PythonRuntime {
     if (message.type === "error") pending.reject(new Error(message.error));
     else if (message.type === "loaded") pending.resolve(message.shape);
     else if (message.type === "csv") pending.resolve(message.csv);
+    else if (message.type === "export") {
+      const { type: _t, id: _i, ...frame } = message;
+      pending.resolve(frame);
+    }
     else if (message.type === "result") {
       const { type: _t, id: _i, ...result } = message;
       pending.resolve(result);

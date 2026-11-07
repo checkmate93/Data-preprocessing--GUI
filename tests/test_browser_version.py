@@ -41,7 +41,7 @@ def test_browser_df_becomes_a_version_with_types(client):
     sid = new_session(client)
     data = save(client, sid, 0).json()
     assert data["history"]["current_version"] == 1
-    assert data["history"]["versions"][1]["label"] == "Βοηθός: female/male → 1/0"
+    assert data["history"]["versions"][1]["label"] == "Python: female/male → 1/0"
     df = server.SESSIONS[sid]["shared"]["df_cache"]["df"]
     assert df["afm"].iloc[0] == "094014201"  # leading zero kept
     assert str(df["joined"].dtype).startswith("datetime64")

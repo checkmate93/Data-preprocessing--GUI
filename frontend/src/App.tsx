@@ -1,345 +1,180 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, download, saveBlob, type ReloadOptions } from "./api";
-import { DataGrid } from "./components/DataGrid";
-import { ExportDialog, ReloadDialog, ScriptDialog, type ExportOptions } from "./components/Dialogs";
-import { HistoryPanel } from "./components/HistoryPanel";
-import { ParamDialog, hasParams } from "./components/ParamDialog";
-import { ProfileBar } from "./components/ProfileBar";
-import { ResultPanel } from "./components/ResultPanel";
-import { Sidebar } from "./components/Sidebar";
-import { Upload } from "./components/Upload";
-import { DELIMITER_LABEL, formatBytes } from "./format";
-import { ChatPanel } from "./components/ChatPanel";
-import { PythonPanel } from "./components/PythonPanel";
-import type { AssistantStatus, Catalog, ChatState, OpResult, Operation, Page, SessionState } from "./types";
+/**
+ * Tab manager: one tab per dataset. Every Workspace stays mounted (inactive ones are hidden with CSS),
+ * so each tab keeps its own data, grid position, results, chat and Python variables while you switch.
+ * Closing a tab deletes its server session.
+ */
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "./api";
+import { Modal } from "./components/Modal";
+import { Workspace, type TabMeta } from "./components/Workspace";
+import type { AssistantStatus, Catalog } from "./types";
 
-const EMPTY_CHAT: ChatState = { messages: [], usage: { input_tokens: 0, output_tokens: 0, calls: 0, last_input_tokens: 0 } };
-
-interface View {
-  page: number;
-  size: number;
-  sort: string | null;
-  desc: boolean;
+interface Tab {
+  id: string;
+  meta: TabMeta;
 }
 
-type Modal = { kind: "export" } | { kind: "reload" } | { kind: "script"; script: string } | null;
+type Confirm = { kind: "one"; id: string } | { kind: "all" } | null;
 
-const FIRST_VIEW: View = { page: 1, size: 50, sort: null, desc: false };
+const MAX_TABS = 10;
+let counter = 0;
+
+function newTab(): Tab {
+  counter += 1;
+  return { id: `tab-${Date.now()}-${counter}`, meta: { title: "Νέο αρχείο", sessionId: null, dirty: false, busy: false } };
+}
 
 export default function App() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [session, setSession] = useState<SessionState | null>(null);
-  const [page, setPage] = useState<Page | null>(null);
-  const [view, setView] = useState<View>(FIRST_VIEW);
-  const [result, setResult] = useState<OpResult | null>(null);
-  const [dialog, setDialog] = useState<{ op: Operation; initial?: Record<string, unknown> } | null>(null);
-  const [modal, setModal] = useState<Modal>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ tone: "error" | "ok"; text: string } | null>(null);
   const [assistant, setAssistant] = useState<AssistantStatus | null>(null);
-  const [chat, setChat] = useState<ChatState>(EMPTY_CHAT);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [pythonOpen, setPythonOpen] = useState(false);
-  const [pythonMounted, setPythonMounted] = useState(false);
-  const [chatBusy, setChatBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [tabs, setTabs] = useState<Tab[]>(() => [newTab()]);
+  const [activeId, setActiveId] = useState(() => tabs[0].id);
+  const [confirm, setConfirm] = useState<Confirm>(null);
+  const tabRefs = useRef(new Map<string, HTMLButtonElement>());
 
   useEffect(() => {
-    api.catalog().then(setCatalog).catch((e: Error) => setToast({ tone: "error", text: e.message }));
+    api.catalog().then(setCatalog).catch((e: Error) => setLoadError(e.message));
     api.assistantStatus().then(setAssistant).catch(() => setAssistant(null));
   }, []);
 
-  useEffect(() => {
-    if (toast?.tone !== "ok") return;
-    const timer = setTimeout(() => setToast(null), 3500);
-    return () => clearTimeout(timer);
-  }, [toast]);
-
-  /** Run an async action with a busy indicator and error toast. */
-  const act = useCallback(async (label: string, fn: () => Promise<void>) => {
-    setBusy(label);
-    try {
-      await fn();
-    } catch (e) {
-      setToast({ tone: "error", text: (e as Error).message });
-    } finally {
-      setBusy(null);
+  // One stable callback per tab id, so Workspace's effect does not re-fire on every render.
+  const metaHandlers = useRef(new Map<string, (meta: TabMeta) => void>());
+  const onMetaFor = useCallback((id: string) => {
+    let handler = metaHandlers.current.get(id);
+    if (!handler) {
+      handler = (meta: TabMeta) =>
+        setTabs((all) => all.map((t) => (t.id === id && JSON.stringify(t.meta) !== JSON.stringify(meta) ? { ...t, meta } : t)));
+      metaHandlers.current.set(id, handler);
     }
+    return handler;
   }, []);
 
-  const loadPage = useCallback(async (id: string, next: View) => {
-    setView(next);
-    setPage(await api.data(id, next.page, next.size, next.sort, next.desc));
-  }, []);
-
-  function applyState(next: SessionState & { result?: OpResult; page?: Page }) {
-    const { result: _r, page: _p, ...state } = next;
-    setSession(state);
+  function addTab() {
+    if (tabs.length >= MAX_TABS) return;
+    const tab = newTab();
+    setTabs((all) => [...all, tab]);
+    setActiveId(tab.id);
   }
 
-  const upload = (file: File) =>
-    act("Ανάγνωση αρχείου…", async () => {
-      const data = await api.upload(file);
-      applyState(data);
-      setPage(data.page);
-      setView(FIRST_VIEW);
-      setResult(null);
-      setChat(EMPTY_CHAT);
-    });
-
-  const sendChat = async (message: string, token: string) => {
-    if (!session) return;
-    setChatBusy(true);
-    try {
-      const data = await api.sendChat(session.session_id, message, token);
-      setChat(data.chat);
-      const { chat: _c, data_changed, ...state } = data;
-      applyState(state);
-      if (data_changed) await loadPage(session.session_id, { ...view, page: 1, sort: null });
-    } finally {
-      setChatBusy(false);
+  /** Remove tabs, delete their server sessions, keep at least one (empty) tab. */
+  function closeTabs(ids: string[]) {
+    const closing = tabs.filter((t) => ids.includes(t.id));
+    for (const tab of closing) {
+      if (tab.meta.sessionId) api.deleteSession(tab.meta.sessionId).catch(() => undefined);
+      metaHandlers.current.delete(tab.id);
     }
-  };
+    const remaining = tabs.filter((t) => !ids.includes(t.id));
+    if (remaining.length === 0) {
+      const fresh = newTab();
+      setTabs([fresh]);
+      setActiveId(fresh.id);
+      return;
+    }
+    if (ids.includes(activeId)) {
+      const index = tabs.findIndex((t) => t.id === activeId);
+      const next = tabs.slice(index + 1).find((t) => !ids.includes(t.id)) ?? remaining[remaining.length - 1];
+      setActiveId(next.id);
+    }
+    setTabs(remaining);
+  }
 
-  const clearChat = async () => {
-    if (!session) return;
-    setChat(await api.clearChat(session.session_id));
-  };
+  function requestClose(id: string) {
+    const tab = tabs.find((t) => t.id === id);
+    if (tab?.meta.dirty || tab?.meta.busy) setConfirm({ kind: "one", id });
+    else closeTabs([id]);
+  }
 
-  const runOp = (op: Operation, params: Record<string, unknown>, preview: boolean) =>
-    act(`${op.label}…`, async () => {
-      if (!session) return;
-      const data = await api.op(session.session_id, op.id, params, preview);
-      setDialog(null);
-      applyState(data);
-      setResult(data.result);
-      if (op.kind === "transform" && !preview) {
-        await loadPage(session.session_id, { ...view, page: 1, sort: null });
-        setToast({ tone: "ok", text: data.result.message || "Έγινε" });
-      }
-    });
+  function requestCloseAll() {
+    if (tabs.some((t) => t.meta.sessionId)) setConfirm({ kind: "all" });
+    else closeTabs(tabs.map((t) => t.id));
+  }
 
-  const pickOp = (op: Operation, initial?: Record<string, unknown>) => {
-    if (hasParams(op)) setDialog({ op, initial });
-    else runOp(op, initial ?? {}, false);
-  };
+  function onTabKey(event: React.KeyboardEvent, index: number) {
+    const move = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (move) {
+      const next = tabs[(index + move + tabs.length) % tabs.length];
+      setActiveId(next.id);
+      tabRefs.current.get(next.id)?.focus();
+    } else if (event.key === "Delete") {
+      requestClose(tabs[index].id);
+    }
+  }
 
-  const move = (label: string, fn: (id: string) => ReturnType<typeof api.undo>) =>
-    act(label, async () => {
-      if (!session) return;
-      const data = await fn(session.session_id);
-      applyState(data);
-      setResult(null);
-      await loadPage(session.session_id, { ...view, page: 1 });
-      setToast({ tone: "ok", text: data.result.message });
-    });
-
-  const reload = (options: ReloadOptions) =>
-    act("Ανάγνωση αρχείου…", async () => {
-      if (!session) return;
-      const data = await api.reload(session.session_id, options);
-      applyState(data);
-      setPage(data.page);
-      setView(FIRST_VIEW);
-      setResult(null);
-      setModal(null);
-    });
-
-  const exportData = (options: ExportOptions) =>
-    act("Εξαγωγή…", async () => {
-      if (!session) return;
-      await download(api.exportUrl(session.session_id, options.format, options.encoding, options.delimiter), "export");
-      setModal(null);
-    });
-
-  const showScript = () =>
-    act("Δημιουργία κώδικα…", async () => {
-      if (!session) return;
-      const data = await api.script(session.session_id);
-      setModal({ kind: "script", script: data.script });
-    });
-
-  const downloadRecipe = () =>
-    act("Recipe…", async () => {
-      if (!session) return;
-      const recipe = await api.recipe(session.session_id);
-      saveBlob(new Blob([JSON.stringify(recipe, null, 2)], { type: "application/json" }), "recipe.json");
-    });
-
-  const applyRecipe = (file: File) =>
-    act("Εφαρμογή recipe…", async () => {
-      if (!session) return;
-      let recipe: unknown;
-      try {
-        recipe = JSON.parse(await file.text());
-      } catch {
-        throw new Error("Το αρχείο δεν είναι έγκυρο recipe.json.");
-      }
-      const data = await api.applyRecipe(session.session_id, recipe);
-      applyState(data);
-      setResult(data.result);
-      await loadPage(session.session_id, { ...view, page: 1, sort: null });
-    });
-
-  const attach = async (file: File) => {
-    if (!session) return [];
-    const data = await api.attach(session.session_id, file);
-    applyState(data);
-    return data.attachments;
-  };
-
-  const newFile = () => {
-    if (session) api.deleteSession(session.session_id).catch(() => undefined);
-    setSession(null);
-    setPage(null);
-    setResult(null);
-    setChat(EMPTY_CHAT);
-  };
-
-  const sortBy = (column: string) => {
-    if (!session) return;
-    const next: View = !column
-      ? { ...view, sort: null, desc: false, page: 1 }
-      : view.sort === column
-        ? { ...view, desc: !view.desc, page: 1 }
-        : { ...view, sort: column, desc: false, page: 1 };
-    act("Ταξινόμηση…", () => loadPage(session.session_id, next));
-  };
-
-  const toastView = toast && (
-    <div className={`toast ${toast.tone}`} role="status">
-      <span>{toast.text}</span>
-      <button className="icon-btn" onClick={() => setToast(null)} aria-label="Κλείσιμο">✕</button>
-    </div>
-  );
-
-  if (!session || !page || !catalog)
-    return (
-      <>
-        <Upload busy={busy !== null} onFile={upload} />
-        {toastView}
-      </>
-    );
-
-  const { source, profile, history } = session;
-  const columns = Object.entries(profile.columns);
+  const confirmTab = confirm?.kind === "one" ? tabs.find((t) => t.id === confirm.id) : null;
+  const withData = tabs.filter((t) => t.meta.sessionId).length;
 
   return (
-    <div className="app">
-      <header className="topbar">
+    <div className="shell">
+      <nav className="tabbar">
         <div className="brand">DataPrep Studio</div>
-        <div className="file-info" title={source.read_warnings?.join("\n")}>
-          <b>{source.filename}</b>
-          <span className="muted small">
-            {source.format.toUpperCase()} · {formatBytes(source.size_bytes)}
-            {source.encoding && ` · ${source.encoding}`}
-            {source.delimiter && ` · ${DELIMITER_LABEL[source.delimiter] ?? source.delimiter}`}
-            {source.sheet && ` · sheet: ${source.sheet}`}
-          </span>
-          {!!source.read_warnings?.length && <span className="chip warn">{source.read_warnings.length} προειδοποιήσεις</span>}
-        </div>
-        <div className="topbar-actions">
-          {busy && <span className="busy"><span className="spinner small" />{busy}</span>}
-          <button
-            className={`btn ${pythonOpen ? "active" : ""}`}
-            aria-pressed={pythonOpen}
-            title="Γράψε δικό σου κώδικα pandas· τρέχει στον browser σου"
-            onClick={() => {
-              setPythonMounted(true);
-              setPythonOpen((v) => !v);
-              setChatOpen(false);
-            }}
-          >
-            🐍 Python
+        <div className="tabs" role="tablist" aria-label="Αρχεία">
+          {tabs.map((tab, index) => (
+            <div key={tab.id} className={`tab ${tab.id === activeId ? "active" : ""}`}>
+              <button
+                ref={(el) => {
+                  if (el) tabRefs.current.set(tab.id, el);
+                  else tabRefs.current.delete(tab.id);
+                }}
+                role="tab"
+                aria-selected={tab.id === activeId}
+                tabIndex={tab.id === activeId ? 0 : -1}
+                className="tab-title"
+                title={tab.meta.title}
+                onClick={() => setActiveId(tab.id)}
+                onAuxClick={(e) => e.button === 1 && requestClose(tab.id)}
+                onKeyDown={(e) => onTabKey(e, index)}
+              >
+                {tab.meta.busy ? <span className="spinner small" /> : tab.meta.dirty ? <span className="dirty-dot" aria-label="έχει αλλαγές" /> : null}
+                <span>{tab.meta.title}</span>
+              </button>
+              <button className="tab-close" onClick={() => requestClose(tab.id)} aria-label={`Κλείσιμο ${tab.meta.title}`} title="Κλείσιμο (Delete)">
+                ✕
+              </button>
+            </div>
+          ))}
+          <button className="tab-add" onClick={addTab} disabled={tabs.length >= MAX_TABS}
+            title={tabs.length >= MAX_TABS ? `Έως ${MAX_TABS} καρτέλες` : "Νέα καρτέλα"} aria-label="Νέα καρτέλα">
+            +
           </button>
-          <button className={`btn ${chatOpen ? "active" : ""}`} onClick={() => { setChatOpen((v) => !v); setPythonOpen(false); }} aria-pressed={chatOpen}>
-            💬 Βοηθός{chat.messages.length ? ` (${chat.messages.filter((m) => m.role === "user").length})` : ""}
-          </button>
-          <button className="btn" onClick={() => setModal({ kind: "reload" })}>Ξαναδιάβασε</button>
-          <button className="btn" onClick={showScript}>Κώδικας</button>
-          <button className="btn primary" onClick={() => setModal({ kind: "export" })}>Εξαγωγή</button>
-          <button className="btn ghost" onClick={newFile}>Νέο αρχείο</button>
         </div>
-      </header>
+        <button className="btn small ghost close-all" onClick={requestCloseAll} disabled={tabs.length === 1 && !tabs[0].meta.sessionId}>
+          Κλείσιμο όλων
+        </button>
+      </nav>
 
-      <Sidebar catalog={catalog} suggestions={session.suggestions} onPick={pickOp} />
+      {loadError && <div className="alert error">Ο server δεν απαντά: {loadError}</div>}
+      {tabs.map((tab) => (
+        <Workspace key={tab.id} catalog={catalog} assistant={assistant} active={tab.id === activeId} onMeta={onMetaFor(tab.id)} />
+      ))}
 
-      <main className="workspace">
-        <ProfileBar profile={profile} version={history.current_version} />
-        {result && (
-          <ResultPanel
-            result={result}
-            sessionId={session.session_id}
-            onClose={() => setResult(null)}
-            onApply={() => {
-              const op = catalog.operations.find((o) => o.id === result.op);
-              if (op) runOp(op, result.params ?? {}, false);
-            }}
-          />
-        )}
-        <DataGrid
-          page={page}
-          profile={profile}
-          sort={view.sort}
-          desc={view.desc}
-          onSort={sortBy}
-          onPage={(n) => act("Φόρτωση…", () => loadPage(session.session_id, { ...view, page: n }))}
-          onSize={(n) => act("Φόρτωση…", () => loadPage(session.session_id, { ...view, size: n, page: 1 }))}
-        />
-      </main>
-
-      <HistoryPanel
-        history={history}
-        onUndo={() => move("Αναίρεση…", api.undo)}
-        onRedo={() => move("Επανάληψη…", api.redo)}
-        onCheckout={(v) => move(`Μετάβαση στη v${v}…`, (id) => api.checkout(id, v))}
-        onScript={showScript}
-        onRecipe={downloadRecipe}
-        onApplyRecipe={applyRecipe}
-      />
-
-      {dialog && (
-        <ParamDialog
-          op={dialog.op}
-          columns={columns}
-          attachments={session.attachments ?? []}
-          onAttach={attach}
-          initial={dialog.initial}
-          onClose={() => setDialog(null)}
-          onRun={(params, preview) => runOp(dialog.op, params, preview)}
-        />
+      {confirm && (
+        <Modal
+          title={confirm.kind === "all" ? "Κλείσιμο όλων των καρτελών" : "Κλείσιμο καρτέλας"}
+          onClose={() => setConfirm(null)}
+          footer={
+            <>
+              <button className="btn ghost" onClick={() => setConfirm(null)}>Άκυρο</button>
+              <button
+                className="btn danger"
+                autoFocus
+                onClick={() => {
+                  closeTabs(confirm.kind === "all" ? tabs.map((t) => t.id) : [confirm.id]);
+                  setConfirm(null);
+                }}
+              >
+                {confirm.kind === "all" ? `Κλείσιμο ${tabs.length}` : "Κλείσιμο"}
+              </button>
+            </>
+          }
+        >
+          {confirm.kind === "all" ? (
+            <p>Θα κλείσουν {tabs.length} καρτέλες ({withData} με δεδομένα). Οι εκδόσεις, οι συνομιλίες και ό,τι υπάρχει στο Python θα διαγραφούν και δεν επανέρχονται. Κατέβασε πρώτα ό,τι χρειάζεσαι.</p>
+          ) : (
+            <p>Η καρτέλα «{confirmTab?.meta.title}» έχει αλλαγές. Οι εκδόσεις, η συνομιλία και ό,τι υπάρχει στο Python θα διαγραφούν και δεν επανέρχονται.</p>
+          )}
+        </Modal>
       )}
-      {pythonMounted && (
-        <PythonPanel
-          key={session.session_id}
-          sessionId={session.session_id}
-          version={history.current_version}
-          profile={profile}
-          filename={source.filename}
-          open={pythonOpen}
-          onClose={() => setPythonOpen(false)}
-        />
-      )}
-      {chatOpen && (
-        <ChatPanel
-          sessionId={session.session_id}
-          status={assistant}
-          chat={chat}
-          busy={chatBusy}
-          onSend={sendChat}
-          onClear={clearChat}
-          onClose={() => setChatOpen(false)}
-        />
-      )}
-      {modal?.kind === "export" &&<ExportDialog onClose={() => setModal(null)} onExport={exportData} />}
-      {modal?.kind === "reload" && <ReloadDialog source={source} onClose={() => setModal(null)} onReload={reload} />}
-      {modal?.kind === "script" && (
-        <ScriptDialog
-          script={modal.script}
-          onClose={() => setModal(null)}
-          onDownload={() => saveBlob(new Blob([modal.script], { type: "text/x-python" }), "pipeline.py")}
-        />
-      )}
-      {toastView}
     </div>
   );
 }

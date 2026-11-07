@@ -43,8 +43,12 @@
     Operation flow → ToolResult) → ChatAnswer.
 - **Client-side Python (2026-11-07)**: Pyodide σε Web Worker (`frontend/src/pyodide/`). Δεν περνά από PocketFlow ούτε
   από τον server πέρα από ένα `GET /export?format=csv`· οι τύποι στηλών (κείμενο/ημερομηνίες/category) περνούν ως
-  hints ώστε το `df` στον browser να έχει τους ίδιους τύπους. Δεν δημιουργεί εκδόσεις: τα αποτελέσματα μένουν
-  τοπικά ή κατεβαίνουν ως CSV.
+  hints ώστε το `df` στον browser να έχει τους ίδιους τύπους. «Αποθήκευση ως νέα έκδοση»: `POST /browser-version`
+  (CSV + dtypes + κώδικας + base_version) → op `browser.python_version` μέσα από το Operation flow (έκδοση, undo,
+  pipeline.py, recipe· στο replay ο κώδικας τρέχει στο sandbox). Έλεγχος base_version → 409 αν ο server άλλαξε.
+- **Καρτέλες (2026-11-07)**: `App` = διαχείριση καρτελών, `Workspace` = όλη η οθόνη ενός αρχείου (ήταν το παλιό App).
+  Μία καρτέλα = ένα server session (το backend ήδη υποστήριζε πολλά). Όλα τα Workspace μένουν mounted και τα ανενεργά
+  κρύβονται με CSS, οπότε κρατούν state χωρίς global store. Κλείσιμο → `DELETE /api/sessions/{id}`.
 - **Επόμενα**: phase 3b — LLM προτάσεις στο upload (SuggestNode σε Async), αν χρειαστεί.
 
 ---
