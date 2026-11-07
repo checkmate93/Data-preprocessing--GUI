@@ -12,11 +12,13 @@ import type { AssistantStatus, Catalog } from "./types";
 interface Tab {
   id: string;
   meta: TabMeta;
+  restore?: { sessionId: string; title: string }; // remembered from an earlier visit
 }
 
 type Confirm = { kind: "one"; id: string } | { kind: "all" } | null;
 
 const MAX_TABS = 10;
+const STORAGE_KEY = "dataprep.tabs.v1";
 let counter = 0;
 
 function newTab(): Tab {
@@ -24,12 +26,46 @@ function newTab(): Tab {
   return { id: `tab-${Date.now()}-${counter}`, meta: { title: "Νέο αρχείο", sessionId: null, dirty: false, busy: false } };
 }
 
+interface StoredTabs {
+  tabs: { id: string; sessionId: string | null; title: string }[];
+  activeId: string;
+}
+
+/** Only ids and titles are stored (a few bytes); the data stays on the server. */
+function readStoredTabs(): { tabs: Tab[]; activeId: string } | null {
+  try {
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as StoredTabs | null;
+    if (!stored?.tabs?.length) return null;
+    const tabs = stored.tabs.slice(0, MAX_TABS).map((t): Tab => ({
+      id: t.id,
+      meta: { title: t.title, sessionId: t.sessionId, dirty: !!t.sessionId, busy: false },
+      restore: t.sessionId ? { sessionId: t.sessionId, title: t.title } : undefined,
+    }));
+    const activeId = tabs.some((t) => t.id === stored.activeId) ? stored.activeId : tabs[0].id;
+    return { tabs, activeId };
+  } catch {
+    return null; // storage blocked or corrupt: start with one empty tab
+  }
+}
+
+function storeTabs(tabs: Tab[], activeId: string) {
+  const data: StoredTabs = { tabs: tabs.map((t) => ({ id: t.id, sessionId: t.meta.sessionId, title: t.meta.title })), activeId };
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    /* storage blocked: tabs just won't survive a refresh */
+  }
+}
+
 export default function App() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [assistant, setAssistant] = useState<AssistantStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [tabs, setTabs] = useState<Tab[]>(() => [newTab()]);
-  const [activeId, setActiveId] = useState(() => tabs[0].id);
+  const [initial] = useState(() => readStoredTabs() ?? (() => { const t = newTab(); return { tabs: [t], activeId: t.id }; })());
+  const [tabs, setTabs] = useState<Tab[]>(initial.tabs);
+  const [activeId, setActiveId] = useState(initial.activeId);
+
+  useEffect(() => storeTabs(tabs, activeId), [tabs, activeId]);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
 
@@ -145,7 +181,7 @@ export default function App() {
 
       {loadError && <div className="alert error">Ο server δεν απαντά: {loadError}</div>}
       {tabs.map((tab) => (
-        <Workspace key={tab.id} catalog={catalog} assistant={assistant} active={tab.id === activeId} onMeta={onMetaFor(tab.id)} />
+        <Workspace key={tab.id} catalog={catalog} assistant={assistant} active={tab.id === activeId} onMeta={onMetaFor(tab.id)} restore={tab.restore} />
       ))}
 
       {confirm && (

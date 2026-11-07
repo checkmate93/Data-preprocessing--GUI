@@ -31,6 +31,8 @@ interface Props {
   assistant: AssistantStatus | null;
   active: boolean;
   onMeta: (meta: TabMeta) => void;
+  /** Tab remembered from an earlier visit: restore this server session the first time the tab is shown. */
+  restore?: { sessionId: string; title: string };
 }
 
 const EMPTY_CHAT: ChatState = { messages: [], usage: { input_tokens: 0, output_tokens: 0, calls: 0, last_input_tokens: 0 } };
@@ -46,7 +48,10 @@ type Modal = { kind: "export" } | { kind: "reload" } | { kind: "script"; script:
 
 const FIRST_VIEW: View = { page: 1, size: 50, sort: null, desc: false };
 
-export function Workspace({ catalog, assistant, active, onMeta }: Props) {
+export function Workspace({ catalog, assistant, active, onMeta, restore }: Props) {
+  // "pending" until the tab is first shown: inactive remembered tabs cost no memory and no requests.
+  const [restoreState, setRestoreState] = useState<"none" | "pending" | "loading">(restore ? "pending" : "none");
+  const [notice, setNotice] = useState<string | null>(null);
   const [session, setSession] = useState<SessionState | null>(null);
   const [page, setPage] = useState<Page | null>(null);
   const [view, setView] = useState<View>(FIRST_VIEW);
@@ -61,13 +66,40 @@ export function Workspace({ catalog, assistant, active, onMeta }: Props) {
   const [pythonMounted, setPythonMounted] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
 
-  const title = session?.source.filename ?? "Νέο αρχείο";
-  const sessionId = session?.session_id ?? null;
-  const dirty = !!session && ((session.history.current_version ?? 0) > 0 || chat.messages.length > 0 || pythonMounted);
-  const working = busy !== null || chatBusy;
+  const restoring = restoreState !== "none";
+  const title = session?.source.filename ?? (restoring && restore ? restore.title : "Νέο αρχείο");
+  const sessionId = session?.session_id ?? (restoring && restore ? restore.sessionId : null);
+  // A not-yet-restored tab may hold work on the server: closing it asks first.
+  const dirty = restoring || (!!session && ((session.history.current_version ?? 0) > 0 || chat.messages.length > 0 || pythonMounted));
+  const working = busy !== null || chatBusy || restoreState === "loading";
   useEffect(() => {
     onMeta({ title, sessionId, dirty, busy: working });
   }, [title, sessionId, dirty, working, onMeta]);
+
+  useEffect(() => {
+    if (!active || restoreState !== "pending" || !restore) return;
+    setRestoreState("loading");
+    (async () => {
+      try {
+        const state = await api.session(restore.sessionId);
+        if (!state) {
+          setNotice(`Η συνεδρία «${restore.title}» δεν υπάρχει πια στον server (έληξε ή ο server ξεκίνησε από την αρχή). Ανέβασε ξανά το αρχείο.`);
+          return;
+        }
+        const [firstPage, savedChat] = await Promise.all([
+          api.data(restore.sessionId, 1, FIRST_VIEW.size, null, false),
+          api.chat(restore.sessionId),
+        ]);
+        setSession(state);
+        setPage(firstPage);
+        setChat(savedChat);
+      } catch (e) {
+        setNotice(`Η επαναφορά της «${restore.title}» απέτυχε: ${(e as Error).message}`);
+      } finally {
+        setRestoreState("none");
+      }
+    })();
+  }, [active, restoreState, restore]);
 
   useEffect(() => {
     if (toast?.tone !== "ok") return;
@@ -239,7 +271,14 @@ export function Workspace({ catalog, assistant, active, onMeta }: Props) {
   if (!session || !page || !catalog)
     return (
       <div className={`tab-pane ${active ? "" : "hidden"}`} role="tabpanel">
-        <Upload busy={busy !== null} onFile={upload} />
+        {restoring ? (
+          <main className="upload-screen">
+            <div className="spinner" />
+            <p>Επαναφορά «{title}»…</p>
+          </main>
+        ) : (
+          <Upload busy={busy !== null} onFile={(file) => { setNotice(null); upload(file); }} notice={notice} />
+        )}
         {toastView}
       </div>
     );

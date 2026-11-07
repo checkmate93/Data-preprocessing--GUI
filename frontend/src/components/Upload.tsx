@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 
 const ACCEPT = ".csv,.tsv,.txt,.dat,.xlsx,.xlsm,.json,.jsonl,.ndjson,.parquet,.feather";
 
-export function Upload({ busy, onFile }: { busy: boolean; onFile: (file: File) => void }) {
+export function Upload({ busy, onFile, notice }: { busy: boolean; onFile: (file: File) => void; notice?: string | null }) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
 
@@ -15,6 +15,7 @@ export function Upload({ busy, onFile }: { busy: boolean; onFile: (file: File) =
     <main className="upload-screen">
       <h1>DataPrep Studio</h1>
       <p className="muted">Ανέβασε ένα αρχείο, δες τι περιέχει και καθάρισέ το με κουμπιά. Κάθε βήμα αναιρείται και γίνεται κώδικας pandas.</p>
+      {notice && <div className="alert warn">{notice}</div>}
       <div
         className={`dropzone ${over ? "over" : ""} ${busy ? "busy" : ""}`}
         onClick={() => !busy && input.current?.click()}

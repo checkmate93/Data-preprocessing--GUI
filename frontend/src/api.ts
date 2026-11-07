@@ -44,6 +44,13 @@ export const api = {
     return request<StateWithPage>("/api/sessions", { method: "POST", body: form });
   },
 
+  session: async (id: string): Promise<SessionState | null> => {
+    const response = await fetch(base(id));
+    if (response.status === 404) return null; // expired or deleted
+    if (!response.ok) throw new Error(await errorMessage(response));
+    return response.json();
+  },
+
   reload: (id: string, options: ReloadOptions) => request<StateWithPage>(`${base(id)}/reload`, json(options)),
 
   data: (id: string, page: number, size: number, sort: string | null, desc: boolean) => {

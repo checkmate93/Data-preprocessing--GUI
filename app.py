@@ -11,7 +11,6 @@ import hmac
 import json
 import logging
 import os
-import re
 import shutil
 import time
 import uuid
@@ -44,6 +43,7 @@ from utils.file_detect import EXTENSIONS
 from utils.json_safe import df_page, to_jsonable
 from utils.ops.browser_python import staged_path
 from utils.op_registry import catalog
+from utils import session_store
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("dataprep")
@@ -53,18 +53,19 @@ STORAGE_ROOT = Path(os.getenv("STORAGE_DIR", ROOT / "storage"))
 FRONTEND_DIST = ROOT / "frontend" / "dist"
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "200"))
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_HOURS", "24")) * 3600
-UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# Only this many sessions keep their current DataFrame in RAM; the rest re-read it from disk when used.
+MAX_HOT_SESSIONS = int(os.getenv("DATAPREP_MAX_HOT_SESSIONS", "6"))
+# Beyond this many, the least recently used sessions leave RAM entirely (metadata too) until used again.
+MAX_LOADED_SESSIONS = int(os.getenv("DATAPREP_MAX_LOADED_SESSIONS", "100"))
 
 SESSIONS: dict[str, dict] = {}
 
 
 @asynccontextmanager
 async def lifespan(_app):
-    """Sessions live in memory, so folders left from a previous run can never be reopened."""
+    """Sessions are kept on disk (storage/<id>/session.pkl), so a restart only removes expired ones."""
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
-    for folder in STORAGE_ROOT.iterdir():
-        if folder.is_dir() and UUID_RE.match(folder.name):
-            shutil.rmtree(folder, ignore_errors=True)
+    session_store.cleanup_expired(STORAGE_ROOT, SESSION_TTL_SECONDS)
     yield
 
 
@@ -81,32 +82,61 @@ app.add_middleware(
 
 
 def _evict_idle():
+    """Forget sessions idle longer than the TTL (memory and disk)."""
     now = time.time()
     for session_id in [sid for sid, s in SESSIONS.items() if now - s["last_used"] > SESSION_TTL_SECONDS]:
         _drop_session(session_id)
+    session_store.cleanup_expired(STORAGE_ROOT, SESSION_TTL_SECONDS, now)
+
+
+def _trim_memory():
+    """LRU: keep DataFrames in RAM only for the most recently used sessions.
+    A session that is running a flow right now (lock held) is never touched."""
+    by_recency = sorted(SESSIONS.items(), key=lambda item: item[1]["last_used"], reverse=True)
+    for rank, (session_id, session) in enumerate(by_recency):
+        if rank < MAX_HOT_SESSIONS or session["lock"].locked():
+            continue
+        if rank >= MAX_LOADED_SESSIONS:
+            SESSIONS.pop(session_id)  # state is already on disk (saved after every change); reloaded on next use
+        elif session["shared"]["df_cache"].get("df") is not None:
+            session_store.evict(session["shared"])
 
 
 def _drop_session(session_id):
     session = SESSIONS.pop(session_id, None)
-    if session:
-        shutil.rmtree(session["shared"]["session"]["storage_dir"], ignore_errors=True)
+    folder = session["shared"]["session"]["storage_dir"] if session else STORAGE_ROOT / session_id
+    if session or session_store.UUID_RE.match(session_id):
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def _session(session_id):
+    """The in-memory session, or the one saved on disk (after a restart), or 404."""
     session = SESSIONS.get(session_id)
     if session is None:
-        raise HTTPException(404, "Η συνεδρία δεν βρέθηκε ή έληξε. Ανέβασε ξανά το αρχείο.")
+        shared = session_store.load_state(STORAGE_ROOT, session_id)
+        if shared is None:
+            raise HTTPException(404, "Η συνεδρία δεν βρέθηκε ή έληξε. Ανέβασε ξανά το αρχείο.")
+        session = {"shared": shared, "lock": asyncio.Lock(), "last_used": time.time()}
+        SESSIONS[session_id] = session
     session["last_used"] = time.time()
+    session_store.touch(session["shared"])
     return session
 
 
 async def _run(session, flow, request=None):
-    """Run a sync flow in a worker thread, one at a time per session."""
+    """Run a sync flow in a worker thread, one at a time per session; then save the state to disk."""
     shared = session["shared"]
     async with session["lock"]:
+        if shared["versions"]:
+            await run_in_threadpool(session_store.hydrate, shared)
         shared["request"] = request or {}
         shared["result"] = None
-        await run_in_threadpool(flow.run, shared)
+        try:
+            await run_in_threadpool(flow.run, shared)
+        finally:
+            if shared["versions"]:
+                await run_in_threadpool(session_store.save_state, shared)
+    _trim_memory()
     result = shared["result"]
     if result and result.get("status") == "error":
         raise HTTPException(400, result["message"])
@@ -213,7 +243,9 @@ async def create_session(file: UploadFile):
         raise
     SESSIONS[session_id] = session
     logger.info("Session %s created from %s (%s bytes)", session_id, filename, size)
-    return {**_state(shared), "page": df_page(shared["df_cache"]["df"])}
+    response = {**_state(shared), "page": df_page(shared["df_cache"]["df"])}
+    _trim_memory()
+    return response
 
 
 class ReloadRequest(BaseModel):
@@ -253,7 +285,9 @@ def delete_session(session_id: str):
 @app.get("/api/sessions/{session_id}/data")
 def get_data(session_id: str, page: int = 1, size: int = 50, sort: str | None = None, desc: bool = False):
     shared = _session(session_id)["shared"]
-    return df_page(shared["df_cache"]["df"], page, size, sort, desc)
+    page_data = df_page(session_store.hydrate(shared), page, size, sort, desc)
+    _trim_memory()
+    return page_data
 
 
 # ------------------------------------------------------------------ operations
@@ -405,6 +439,7 @@ async def clear_chat(session_id: str):
     session = _session(session_id)
     async with session["lock"]:
         session["shared"]["chat"] = empty_chat()
+        session_store.save_state(session["shared"])
     return _chat_payload(session["shared"])
 
 
