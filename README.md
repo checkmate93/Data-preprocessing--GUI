@@ -23,6 +23,23 @@ cd frontend && npm install && npm run build && cd ..
 - CLI demo χωρίς server: `.venv\Scripts\python main.py [αρχείο]`
 - Ρυθμίσεις (env): `MAX_UPLOAD_MB` (200), `SESSION_TTL_HOURS` (24), `STORAGE_DIR` (`./storage`)
 
+## Βοηθός (chat)
+
+Κουμπί «💬 Βοηθός»: ερωτήσεις ή αλλαγές σε φυσική γλώσσα. Το μοντέλο τρέχει κουμπιά ή γράφει κώδικα
+pandas/sklearn/statsmodels που εκτελείται σε απομονωμένη διεργασία. Κάθε αλλαγή = νέα έκδοση (αναίρεση) και μπαίνει
+στο `pipeline.py`. «Καθαρισμός» σβήνει τη συνομιλία και μηδενίζει τα tokens (οι εκδόσεις των δεδομένων μένουν).
+
+| Μεταβλητή | Τι κάνει |
+|---|---|
+| `ANTHROPIC_API_KEY` ή `OPENAI_API_KEY` | Ενεργοποιεί τον βοηθό (χωρίς κλειδί είναι απενεργοποιημένος) |
+| `DATAPREP_LLM_PROVIDER`, `DATAPREP_LLM_MODEL`, `DATAPREP_LLM_BASE_URL` | Επιλογή provider/μοντέλου/gateway (default `claude-sonnet-5-5` / `gpt-4o`) |
+| `DATAPREP_ASSISTANT_TOKEN` | Κωδικός πρόσβασης· **βάλ' τον σε δημόσιο deployment** για να μην καίει tokens οποιοσδήποτε |
+| `DATAPREP_CHAT_MAX_PER_HOUR` (30), `DATAPREP_CHAT_MAX_STEPS` (6), `DATAPREP_CHAT_HISTORY_TURNS` (6) | Όρια κόστους |
+| `DATAPREP_SANDBOX_TIMEOUT` (60 s), `DATAPREP_SANDBOX_MEMORY_MB` (2048, Linux) | Όρια εκτέλεσης κώδικα |
+
+Στο μοντέλο στέλνονται ονόματα/τύποι στηλών, στατιστικά, έως 5 συχνές τιμές ανά στήλη κατηγοριών και τα
+αποτελέσματα του κώδικα — όχι ολόκληρο το αρχείο. Για δεδομένα πελατών χρειάζεται έγκριση για τον provider.
+
 ## Νέο κουμπί σε 3 βήματα
 
 1. Γράψε τη λογική ως καθαρή συνάρτηση στο `utils/ops/helpers.py` (επιστρέφει `(df, report)`).

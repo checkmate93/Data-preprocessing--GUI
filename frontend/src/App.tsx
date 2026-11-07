@@ -9,7 +9,10 @@ import { ResultPanel } from "./components/ResultPanel";
 import { Sidebar } from "./components/Sidebar";
 import { Upload } from "./components/Upload";
 import { DELIMITER_LABEL, formatBytes } from "./format";
-import type { Catalog, OpResult, Operation, Page, SessionState } from "./types";
+import { ChatPanel } from "./components/ChatPanel";
+import type { AssistantStatus, Catalog, ChatState, OpResult, Operation, Page, SessionState } from "./types";
+
+const EMPTY_CHAT: ChatState = { messages: [], usage: { input_tokens: 0, output_tokens: 0, calls: 0, last_input_tokens: 0 } };
 
 interface View {
   page: number;
@@ -32,9 +35,14 @@ export default function App() {
   const [modal, setModal] = useState<Modal>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: "error" | "ok"; text: string } | null>(null);
+  const [assistant, setAssistant] = useState<AssistantStatus | null>(null);
+  const [chat, setChat] = useState<ChatState>(EMPTY_CHAT);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatBusy, setChatBusy] = useState(false);
 
   useEffect(() => {
     api.catalog().then(setCatalog).catch((e: Error) => setToast({ tone: "error", text: e.message }));
+    api.assistantStatus().then(setAssistant).catch(() => setAssistant(null));
   }, []);
 
   useEffect(() => {
@@ -72,7 +80,27 @@ export default function App() {
       setPage(data.page);
       setView(FIRST_VIEW);
       setResult(null);
+      setChat(EMPTY_CHAT);
     });
+
+  const sendChat = async (message: string, token: string) => {
+    if (!session) return;
+    setChatBusy(true);
+    try {
+      const data = await api.sendChat(session.session_id, message, token);
+      setChat(data.chat);
+      const { chat: _c, data_changed, ...state } = data;
+      applyState(state);
+      if (data_changed) await loadPage(session.session_id, { ...view, page: 1, sort: null });
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const clearChat = async () => {
+    if (!session) return;
+    setChat(await api.clearChat(session.session_id));
+  };
 
   const runOp = (op: Operation, params: Record<string, unknown>, preview: boolean) =>
     act(`${op.label}…`, async () => {
@@ -161,6 +189,7 @@ export default function App() {
     setSession(null);
     setPage(null);
     setResult(null);
+    setChat(EMPTY_CHAT);
   };
 
   const sortBy = (column: string) => {
@@ -207,6 +236,9 @@ export default function App() {
         </div>
         <div className="topbar-actions">
           {busy && <span className="busy"><span className="spinner small" />{busy}</span>}
+          <button className={`btn ${chatOpen ? "active" : ""}`} onClick={() => setChatOpen((v) => !v)} aria-pressed={chatOpen}>
+            💬 Βοηθός{chat.messages.length ? ` (${chat.messages.filter((m) => m.role === "user").length})` : ""}
+          </button>
           <button className="btn" onClick={() => setModal({ kind: "reload" })}>Ξαναδιάβασε</button>
           <button className="btn" onClick={showScript}>Κώδικας</button>
           <button className="btn primary" onClick={() => setModal({ kind: "export" })}>Εξαγωγή</button>
@@ -261,7 +293,18 @@ export default function App() {
           onRun={(params, preview) => runOp(dialog.op, params, preview)}
         />
       )}
-      {modal?.kind === "export" && <ExportDialog onClose={() => setModal(null)} onExport={exportData} />}
+      {chatOpen && (
+        <ChatPanel
+          sessionId={session.session_id}
+          status={assistant}
+          chat={chat}
+          busy={chatBusy}
+          onSend={sendChat}
+          onClear={clearChat}
+          onClose={() => setChatOpen(false)}
+        />
+      )}
+      {modal?.kind === "export" &&<ExportDialog onClose={() => setModal(null)} onExport={exportData} />}
       {modal?.kind === "reload" && <ReloadDialog source={source} onClose={() => setModal(null)} onReload={reload} />}
       {modal?.kind === "script" && (
         <ScriptDialog

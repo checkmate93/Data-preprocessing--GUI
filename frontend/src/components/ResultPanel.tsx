@@ -64,7 +64,7 @@ function DiffChips({ diff }: { diff: Diff }) {
   return <div className="chips">{chips.map((chip) => <span key={chip} className="chip">{chip}</span>)}</div>;
 }
 
-function SectionView({ section, sessionId }: { section: Section; sessionId: string }) {
+export function SectionView({ section, sessionId }: { section: Section; sessionId: string }) {
   const title = section.title ? <h3>{section.title}</h3> : null;
   switch (section.type) {
     case "cards":

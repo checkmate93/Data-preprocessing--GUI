@@ -5,6 +5,12 @@ from pocketflow import BatchFlow, Flow, Node
 from nodes import (
     AttachFileNode,
     BuildErrorNode,
+    ChatAnswerNode,
+    ChatStartNode,
+    DecideActionNode,
+    ToolRequestNode,
+    ToolResultNode,
+    empty_chat,
     BuildResultNode,
     DetectFormatNode,
     ExecuteOperationNode,
@@ -39,6 +45,7 @@ def create_shared(session_id, storage_dir, source_path, filename, size_bytes, ad
         "result": None,
         "suggestions": [],
         "attachments": {},  # second files for joins: name -> {filename, format, encoding, data_path, shape, columns}
+        "chat": empty_chat(),  # assistant messages + token usage; DELETE /chat resets it
     }
 
 
@@ -86,6 +93,17 @@ def create_export_flow():
 
 def create_script_flow():
     return Flow(start=GenerateScriptNode())
+
+
+def create_chat_flow():
+    """Agent: decide -> (button or sandboxed code through the operation flow) -> record -> decide ... -> answer."""
+    start, decide, request, record, answer = ChatStartNode(), DecideActionNode(), ToolRequestNode(), ToolResultNode(), ChatAnswerNode()
+    start >> decide
+    decide - "tool" >> request
+    request >> create_operation_flow() >> record
+    record - "decide" >> decide
+    decide - "answer" >> answer
+    return Flow(start=start)
 
 
 def create_attach_flow():

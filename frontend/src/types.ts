@@ -155,7 +155,45 @@ export interface Operation {
   schema: { properties?: Record<string, SchemaProp>; required?: string[]; $defs?: Record<string, SchemaProp> };
 }
 
+export interface ChatStep {
+  kind: "run_python" | "run_operation";
+  mode?: "analyze" | "transform" | null;
+  description?: string | null;
+  code?: string | null;
+  op: string;
+  params?: Record<string, unknown> | null;
+  status: "ok" | "error";
+  message: string;
+  output: string;
+  sections: Section[];
+  version: number | null;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  at: string;
+  steps?: ChatStep[];
+  usage?: { input_tokens: number; output_tokens: number; calls: number };
+  failed?: boolean;
+}
+
+export interface ChatState {
+  messages: ChatMessage[];
+  usage: { input_tokens: number; output_tokens: number; calls: number; last_input_tokens: number };
+}
+
+export interface AssistantStatus {
+  enabled: boolean;
+  provider: string | null;
+  model: string | null;
+  token_required: boolean;
+  max_steps: number;
+  history_turns: number;
+  max_per_hour: number;
+}
+
 export interface Catalog {
-  categories: { id: string; label: string }[];
+  categories: { id: string; label: string; hidden?: boolean }[];
   operations: Operation[];
 }

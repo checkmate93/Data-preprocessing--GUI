@@ -1,4 +1,4 @@
-import type { Catalog, OpResult, Page, SessionState } from "./types";
+import type { AssistantStatus, Catalog, ChatState, OpResult, Page, SessionState } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -70,6 +70,16 @@ export const api = {
   },
 
   fileUrl: (id: string, name: string) => `${base(id)}/files/${encodeURIComponent(name)}`,
+
+  assistantStatus: () => request<AssistantStatus>("/api/assistant/status"),
+  chat: (id: string) => request<ChatState>(`${base(id)}/chat`),
+  sendChat: (id: string, message: string, token: string) =>
+    request<SessionState & { chat: ChatState; data_changed: boolean }>(`${base(id)}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { "X-Assistant-Token": token } : {}) },
+      body: JSON.stringify({ message }),
+    }),
+  clearChat: (id: string) => request<ChatState>(`${base(id)}/chat`, { method: "DELETE" }),
 
   exportUrl: (id: string, format: string, encoding: string, delimiter: string) =>
     `${base(id)}/export?${new URLSearchParams({ format, encoding, delimiter })}`,

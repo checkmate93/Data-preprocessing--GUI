@@ -7,6 +7,7 @@ Run:  uvicorn app:app --reload
 
 import asyncio
 import copy
+import hmac
 import logging
 import os
 import re
@@ -17,7 +18,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, Header, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -26,6 +27,7 @@ from pydantic import BaseModel
 
 from flow import (
     create_attach_flow,
+    create_chat_flow,
     create_export_flow,
     create_move_flow,
     create_operation_flow,
@@ -34,7 +36,9 @@ from flow import (
     create_shared,
     create_upload_flow,
 )
-from nodes import active_steps
+from nodes import active_steps, empty_chat
+from utils.assistant import HISTORY_TURNS, MAX_STEPS
+from utils.call_llm import llm_config
 from utils.file_detect import EXTENSIONS
 from utils.json_safe import df_page, to_jsonable
 from utils.op_registry import catalog
@@ -335,6 +339,71 @@ async def add_attachment(session_id: str, file: UploadFile):
     await _save_upload(file, target, target)
     await _run(session, create_attach_flow(), {"path": str(target), "filename": filename})
     return _state(session["shared"])
+
+
+# ------------------------------------------------------------------ chat assistant
+
+ASSISTANT_TOKEN = os.getenv("DATAPREP_ASSISTANT_TOKEN", "")
+CHAT_MAX_PER_HOUR = int(os.getenv("DATAPREP_CHAT_MAX_PER_HOUR", "30"))
+CHAT_MAX_CHARS = 2000
+
+
+def _check_assistant(token):
+    if llm_config() is None:
+        raise HTTPException(503, "Ο βοηθός δεν έχει ρυθμιστεί: ο server χρειάζεται ANTHROPIC_API_KEY ή OPENAI_API_KEY.")
+    if ASSISTANT_TOKEN and not hmac.compare_digest(token or "", ASSISTANT_TOKEN):
+        raise HTTPException(401, "Λάθος ή κενός κωδικός πρόσβασης βοηθού.")
+
+
+def _chat_payload(shared):
+    chat = shared.get("chat") or empty_chat()
+    return to_jsonable({"messages": chat["messages"], "usage": chat["usage"]})
+
+
+@app.get("/api/assistant/status")
+def assistant_status():
+    config = llm_config()
+    return {"enabled": config is not None, "provider": config and config["provider"], "model": config and config["model"],
+            "token_required": bool(ASSISTANT_TOKEN), "max_steps": MAX_STEPS, "history_turns": HISTORY_TURNS,
+            "max_per_hour": CHAT_MAX_PER_HOUR}
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+@app.get("/api/sessions/{session_id}/chat")
+def get_chat(session_id: str):
+    return _chat_payload(_session(session_id)["shared"])
+
+
+@app.post("/api/sessions/{session_id}/chat")
+async def send_chat(session_id: str, body: ChatRequest, x_assistant_token: str | None = Header(default=None)):
+    _check_assistant(x_assistant_token)
+    session = _session(session_id)
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(400, "Γράψε μια ερώτηση.")
+    if len(message) > CHAT_MAX_CHARS:
+        raise HTTPException(400, f"Το μήνυμα ξεπερνά τους {CHAT_MAX_CHARS} χαρακτήρες.")
+    now = time.time()
+    recent = [t for t in session.setdefault("chat_times", []) if now - t < 3600]
+    if len(recent) >= CHAT_MAX_PER_HOUR:
+        raise HTTPException(429, f"Όριο {CHAT_MAX_PER_HOUR} μηνυμάτων την ώρα ανά συνεδρία. Δοκίμασε σε λίγο.")
+    session["chat_times"] = recent + [now]
+    version_before = session["shared"]["current_version"]
+    await _run(session, create_chat_flow(), {"message": message})
+    shared = session["shared"]
+    return {"chat": _chat_payload(shared), "data_changed": shared["current_version"] != version_before, **_state(shared)}
+
+
+@app.delete("/api/sessions/{session_id}/chat")
+async def clear_chat(session_id: str):
+    """Forget the conversation (the model stops receiving it). The data versions stay."""
+    session = _session(session_id)
+    async with session["lock"]:
+        session["shared"]["chat"] = empty_chat()
+    return _chat_payload(session["shared"])
 
 
 ML_FILES = {"train_clean.csv", "test_clean.csv", "preprocess.py", "raw.csv", "config.json"}

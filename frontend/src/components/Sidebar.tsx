@@ -33,7 +33,7 @@ export function Sidebar({ catalog, suggestions, onPick }: Props) {
         </div>
       )}
       <input className="search" placeholder="Αναζήτηση λειτουργίας…" value={query} onChange={(e) => setQuery(e.target.value)} />
-      {catalog.categories.map((category) => {
+      {catalog.categories.filter((category) => !category.hidden).map((category) => {
         const ops = catalog.operations.filter((op) => op.category === category.id && matches(op));
         if (!ops.length) return null;
         const isClosed = closed[category.id] && !q;

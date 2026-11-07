@@ -14,6 +14,17 @@ import pandas as pd
 from pocketflow import Node
 from pydantic import ValidationError
 
+from utils.assistant import (
+    MAX_STEPS,
+    dataset_context,
+    decision_prompt,
+    history_text,
+    result_text,
+    system_prompt,
+    validate_decision,
+)
+from utils.call_llm import chat as chat_llm
+from utils.call_llm import parse_yaml_block
 from utils.code_gen import build_script
 from utils.diff import diff_summary
 from utils.file_detect import SUPPORTED_FORMATS, detect_encoding, detect_format, list_sheets, sniff_csv
@@ -179,10 +190,11 @@ class SaveVersionNode(Node):
         if not p["initial"]:
             spec = get_op(p["spec_id"])
             step = len(shared["recipe"]) + 1
+            description = getattr(p["params"], "description", "")
             shared["recipe"].append({
                 "step": step,
                 "op": spec.id,
-                "label": spec.label,
+                "label": f"Βοηθός: {description}" if spec.category == "assistant" and description else spec.label,
                 "params": p["params"].model_dump(mode="json"),
                 "code": p["output"]["code"],
                 "summary": p["output"]["output"].message,
@@ -564,6 +576,128 @@ class ReplayReportNode(Node):
         shared.pop("replay", None)
         shared["pending"] = empty_pending()
         return "default"
+
+
+# ---------------------------------------------------------------- chat assistant (agent)
+
+def empty_chat():
+    return {"messages": [], "usage": {"input_tokens": 0, "output_tokens": 0, "calls": 0, "last_input_tokens": 0}, "turn": None}
+
+
+class ChatStartNode(Node):
+    """Open a turn: store the user's question."""
+
+    def prep(self, shared):
+        return shared["request"]["message"]
+
+    def post(self, shared, message, exec_res):
+        chat = shared.setdefault("chat", empty_chat())
+        chat["messages"].append({"role": "user", "content": message, "at": datetime.now().isoformat(timespec="seconds")})
+        chat["turn"] = {"question": message, "steps": [], "decision": None,
+                        "usage": {"input_tokens": 0, "output_tokens": 0, "calls": 0}}
+        return "default"
+
+
+class DecideActionNode(Node):
+    """LLM picks the next action: run_python, run_operation or answer (YAML, validated, retried)."""
+
+    def __init__(self):
+        super().__init__(max_retries=3)
+
+    def prep(self, shared):
+        chat, cache = shared["chat"], shared["df_cache"]
+        self.spent = {"input_tokens": 0, "output_tokens": 0, "calls": 0, "last_input_tokens": 0}
+        return {
+            "question": chat["turn"]["question"],
+            "steps": chat["turn"]["steps"],
+            "history": chat["messages"][:-1],
+            "context": dataset_context(cache["df"], shared["profile"], shared["current_version"]),
+            "force": len(chat["turn"]["steps"]) >= MAX_STEPS,
+        }
+
+    def exec(self, p):
+        prompt = decision_prompt(p["context"], history_text(p["history"]), p["question"], p["steps"], p["force"])
+        reply = chat_llm([{"role": "user", "content": prompt}], system=system_prompt())
+        self.spent["input_tokens"] += reply["input_tokens"]
+        self.spent["output_tokens"] += reply["output_tokens"]
+        self.spent["calls"] += 1
+        self.spent["last_input_tokens"] = reply["input_tokens"]
+        return validate_decision(parse_yaml_block(reply["text"]), p["force"])
+
+    def exec_fallback(self, p, exc):
+        logger.warning("Assistant decision failed: %s", exc)
+        return {"action": "answer", "failed": True,
+                "text": f"Δεν κατάφερα να ολοκληρώσω την απάντηση ({_friendly_error(exc)}). Δοκίμασε να το διατυπώσεις αλλιώς."}
+
+    def post(self, shared, p, decision):
+        chat = shared["chat"]
+        for key in ("input_tokens", "output_tokens", "calls"):
+            chat["turn"]["usage"][key] += self.spent[key]
+            chat["usage"][key] += self.spent[key]
+        if self.spent["last_input_tokens"]:
+            chat["usage"]["last_input_tokens"] = self.spent["last_input_tokens"]
+        chat["turn"]["decision"] = decision
+        return "answer" if decision["action"] == "answer" else "tool"
+
+
+class ToolRequestNode(Node):
+    """Turn the decision into a normal operation request; the operation flow runs it next."""
+
+    def prep(self, shared):
+        return shared["chat"]["turn"]["decision"]
+
+    def post(self, shared, decision, exec_res):
+        if decision["action"] == "run_python":
+            op = f"assistant.python_{decision['mode']}"
+            params = {"code": decision["code"], "description": str(decision.get("description") or "")[:200]}
+        else:
+            op, params = decision["op"], decision.get("params") or {}
+        shared["request"] = {"op": op, "params": params, "preview": False}
+        shared["result"] = None
+        return "default"
+
+
+CHAT_SECTION_TYPES = {"table", "cards", "bar", "histogram", "box", "scatter", "line", "heatmap", "text"}
+
+
+class ToolResultNode(Node):
+    """Record what the action did, for the model (text) and for the chat UI (sections)."""
+
+    def prep(self, shared):
+        return shared["chat"]["turn"]["decision"], shared["result"] or {}, shared["current_version"]
+
+    def post(self, shared, prep_res, exec_res):
+        decision, result, version = prep_res
+        ok = result.get("status") == "ok"
+        step = {
+            "kind": decision["action"],
+            "mode": decision.get("mode"),
+            "description": decision.get("description") or result.get("label"),
+            "code": decision.get("code"),
+            "op": decision.get("op") or shared["request"]["op"],
+            "params": decision.get("params"),
+            "status": "ok" if ok else "error",
+            "message": result.get("message", ""),
+            "output": result_text(result),
+            "sections": [s for s in result.get("sections", []) if s.get("type") in CHAT_SECTION_TYPES] if ok else [],
+            "version": version if ok and result.get("diff") else None,
+        }
+        shared["chat"]["turn"]["steps"].append(step)
+        return "decide"
+
+
+class ChatAnswerNode(Node):
+    def prep(self, shared):
+        return shared["chat"]["turn"]
+
+    def post(self, shared, turn, exec_res):
+        text = str(turn["decision"].get("text") or "").strip()
+        message = {"role": "assistant", "content": text, "steps": turn["steps"], "usage": turn["usage"],
+                   "failed": bool(turn["decision"].get("failed")), "at": datetime.now().isoformat(timespec="seconds")}
+        shared["chat"]["messages"].append(message)
+        shared["chat"]["turn"] = None
+        shared["result"] = {"status": "ok", "message": text, "sections": [], "warnings": []}
+        return None
 
 
 class GenerateScriptNode(Node):

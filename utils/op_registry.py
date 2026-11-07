@@ -28,7 +28,9 @@ CATEGORIES = [
     ("reshape", "Αναδιάρθρωση"),
     ("charts", "Γραφήματα"),
     ("ml", "ML Prep"),
+    ("assistant", "Βοηθός (AI)"),
 ]
+HIDDEN_CATEGORIES = {"assistant"}  # run by the chat assistant, not shown as buttons
 
 
 class Params(BaseModel):
@@ -90,7 +92,7 @@ def get_op(op_id):
 def catalog():
     _load_operations()
     return {
-        "categories": [{"id": key, "label": label} for key, label in CATEGORIES],
+        "categories": [{"id": key, "label": label, "hidden": key in HIDDEN_CATEGORIES} for key, label in CATEGORIES],
         "operations": [
             {
                 "id": spec.id,

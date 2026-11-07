@@ -28,7 +28,20 @@
     Κανόνες για στήλες που ο χρήστης βάζει στα `drop_columns` αφαιρούνται αυτόματα.
   - Δεν υλοποιήθηκαν (καλύπτονται από άλλα κουμπιά): `columns.lowercase/strip_special` (→ snake_case), `types.parse_locale_number`
     (→ «→ Αριθμός» με δεκαδικό «,»), `missing.drop_columns` (→ «Διαγραφή με κανόνα»), `datetime.timezone`, `rows.drop_index`.
-- **Επόμενα**: phase 3 — LLM προτάσεις και assistant agent.
+- **Phase 3a (2026-11-07) — chat βοηθός, έτοιμο**: agent (§6) με actions `run_python` (analyze/transform σε sandbox),
+  `run_operation` (όλα τα κουμπιά) και `answer`. Ο κώδικας του μοντέλου είναι κι αυτός registry operation
+  (`assistant.python_analyze/transform`, κρυφή κατηγορία), οπότε περνά από το ίδιο Operation flow: εκδόσεις, undo,
+  `pipeline.py`, recipe replay. 45 tests (9 για τον βοηθό με fake LLM, χωρίς tokens).
+- **Αποφάσεις phase 3a** (αλλάζουν το «όχι αυθαίρετο κώδικα» της αρχικής σχεδίασης, κατόπιν αιτήματος):
+  - Sandbox: AST allow-list (μόνο pandas/numpy/sklearn/scipy/statsmodels κ.ά., χωρίς αρχεία/δίκτυο/os/eval/dunder),
+    ξεχωριστή `python -I` διεργασία με timeout, κενό environment (χωρίς API keys), σε Linux και όρια μνήμης/CPU.
+    Δεν είναι πλήρες security boundary: για δημόσιο server → container χωρίς έξοδο στο δίκτυο.
+  - Οι αλλαγές εφαρμόζονται αμέσως (όχι «πρόταση → έγκριση»): κάθε μία είναι νέα έκδοση με αναίρεση.
+  - Κόστος: το μοντέλο βλέπει μόνο τις τελευταίες 6 ερωτήσεις/απαντήσεις (όχι τα παλιά tool outputs), έως 6 βήματα ανά
+    ερώτηση, prompt caching στο system prompt (Anthropic), όριο μηνυμάτων/ώρα, «Καθαρισμός» μηδενίζει το ιστορικό.
+  - Shared store: `shared["chat"] = {messages, usage, turn}`· τα nodes ChatStart → DecideAction ⇄ (ToolRequest →
+    Operation flow → ToolResult) → ChatAnswer.
+- **Επόμενα**: phase 3b — LLM προτάσεις στο upload (SuggestNode σε Async), αν χρειαστεί.
 
 ---
 
