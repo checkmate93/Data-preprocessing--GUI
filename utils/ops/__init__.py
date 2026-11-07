@@ -2,6 +2,7 @@
 
 from utils.ops import (  # noqa: F401
     assistant,
+    browser_python,
     categorical,
     charts,
     columns,

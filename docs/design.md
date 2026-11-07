@@ -41,6 +41,10 @@
     ερώτηση, prompt caching στο system prompt (Anthropic), όριο μηνυμάτων/ώρα, «Καθαρισμός» μηδενίζει το ιστορικό.
   - Shared store: `shared["chat"] = {messages, usage, turn}`· τα nodes ChatStart → DecideAction ⇄ (ToolRequest →
     Operation flow → ToolResult) → ChatAnswer.
+- **Client-side Python (2026-11-07)**: Pyodide σε Web Worker (`frontend/src/pyodide/`). Δεν περνά από PocketFlow ούτε
+  από τον server πέρα από ένα `GET /export?format=csv`· οι τύποι στηλών (κείμενο/ημερομηνίες/category) περνούν ως
+  hints ώστε το `df` στον browser να έχει τους ίδιους τύπους. Δεν δημιουργεί εκδόσεις: τα αποτελέσματα μένουν
+  τοπικά ή κατεβαίνουν ως CSV.
 - **Επόμενα**: phase 3b — LLM προτάσεις στο upload (SuggestNode σε Async), αν χρειαστεί.
 
 ---

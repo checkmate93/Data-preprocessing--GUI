@@ -8,6 +8,7 @@ Run:  uvicorn app:app --reload
 import asyncio
 import copy
 import hmac
+import json
 import logging
 import os
 import re
@@ -18,7 +19,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException, UploadFile
+from fastapi import FastAPI, Form, Header, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -41,6 +42,7 @@ from utils.assistant import HISTORY_TURNS, MAX_STEPS
 from utils.call_llm import llm_config
 from utils.file_detect import EXTENSIONS
 from utils.json_safe import df_page, to_jsonable
+from utils.ops.browser_python import staged_path
 from utils.op_registry import catalog
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -404,6 +406,40 @@ async def clear_chat(session_id: str):
     async with session["lock"]:
         session["shared"]["chat"] = empty_chat()
     return _chat_payload(session["shared"])
+
+
+# ------------------------------------------------------------------ Python in the browser -> new version
+
+@app.post("/api/sessions/{session_id}/browser-version")
+async def save_browser_version(
+    session_id: str,
+    file: UploadFile,
+    base_version: int = Form(...),
+    code: str = Form(""),
+    description: str = Form(""),
+    dtypes: str = Form("{}"),
+):
+    """The df computed with Pyodide becomes a new version (through the normal operation flow)."""
+    session = _session(session_id)
+    shared = session["shared"]
+    if shared["current_version"] != base_version:
+        raise HTTPException(409, f"Τα δεδομένα στον server άλλαξαν σε v{shared['current_version']} ενώ δούλευες στη "
+                                 f"v{base_version}. Κατέβασε το df ή επαναφόρτωσε και τρέξε ξανά τον κώδικα.")
+    try:  # turn malformed form data into a 400
+        dtype_map = json.loads(dtypes)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "Μη έγκυρα dtypes.") from None
+    upload_id = uuid.uuid4().hex
+    target = staged_path(shared["session"]["storage_dir"], upload_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    await _save_upload(file, target, target)
+    params = {"code": code, "description": description[:200] or "Κώδικας Python από τον browser",
+              "upload_id": upload_id, "dtypes": dtype_map}
+    try:
+        result = await _run(session, create_operation_flow(), {"op": "browser.python_version", "params": params})
+    finally:
+        target.unlink(missing_ok=True)
+    return {"result": result, **_state(shared)}
 
 
 ML_FILES = {"train_clean.csv", "test_clean.csv", "preprocess.py", "raw.csv", "config.json"}

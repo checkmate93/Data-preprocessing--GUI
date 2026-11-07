@@ -10,6 +10,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Upload } from "./components/Upload";
 import { DELIMITER_LABEL, formatBytes } from "./format";
 import { ChatPanel } from "./components/ChatPanel";
+import { PythonPanel } from "./components/PythonPanel";
 import type { AssistantStatus, Catalog, ChatState, OpResult, Operation, Page, SessionState } from "./types";
 
 const EMPTY_CHAT: ChatState = { messages: [], usage: { input_tokens: 0, output_tokens: 0, calls: 0, last_input_tokens: 0 } };
@@ -38,6 +39,8 @@ export default function App() {
   const [assistant, setAssistant] = useState<AssistantStatus | null>(null);
   const [chat, setChat] = useState<ChatState>(EMPTY_CHAT);
   const [chatOpen, setChatOpen] = useState(false);
+  const [pythonOpen, setPythonOpen] = useState(false);
+  const [pythonMounted, setPythonMounted] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
 
   useEffect(() => {
@@ -236,7 +239,19 @@ export default function App() {
         </div>
         <div className="topbar-actions">
           {busy && <span className="busy"><span className="spinner small" />{busy}</span>}
-          <button className={`btn ${chatOpen ? "active" : ""}`} onClick={() => setChatOpen((v) => !v)} aria-pressed={chatOpen}>
+          <button
+            className={`btn ${pythonOpen ? "active" : ""}`}
+            aria-pressed={pythonOpen}
+            title="Γράψε δικό σου κώδικα pandas· τρέχει στον browser σου"
+            onClick={() => {
+              setPythonMounted(true);
+              setPythonOpen((v) => !v);
+              setChatOpen(false);
+            }}
+          >
+            🐍 Python
+          </button>
+          <button className={`btn ${chatOpen ? "active" : ""}`} onClick={() => { setChatOpen((v) => !v); setPythonOpen(false); }} aria-pressed={chatOpen}>
             💬 Βοηθός{chat.messages.length ? ` (${chat.messages.filter((m) => m.role === "user").length})` : ""}
           </button>
           <button className="btn" onClick={() => setModal({ kind: "reload" })}>Ξαναδιάβασε</button>
@@ -291,6 +306,17 @@ export default function App() {
           initial={dialog.initial}
           onClose={() => setDialog(null)}
           onRun={(params, preview) => runOp(dialog.op, params, preview)}
+        />
+      )}
+      {pythonMounted && (
+        <PythonPanel
+          key={session.session_id}
+          sessionId={session.session_id}
+          version={history.current_version}
+          profile={profile}
+          filename={source.filename}
+          open={pythonOpen}
+          onClose={() => setPythonOpen(false)}
         />
       )}
       {chatOpen && (
