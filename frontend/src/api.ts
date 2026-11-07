@@ -35,6 +35,19 @@ export interface ReloadOptions {
 
 const base = (id: string) => `/api/sessions/${encodeURIComponent(id)}`;
 
+/** Search + visible columns of the grid (view only, the data is not changed). */
+export interface GridView {
+  q?: string;
+  scope?: string | null;
+  hide?: string[]; // hidden columns (new columns from later steps stay visible)
+}
+
+function appendView(query: URLSearchParams, view: GridView) {
+  if (view.q?.trim()) query.set("q", view.q.trim());
+  if (view.q?.trim() && view.scope) query.set("scope", view.scope);
+  for (const column of view.hide ?? []) query.append("hide", column);
+}
+
 export const api = {
   catalog: () => request<Catalog>("/api/operations"),
 
@@ -53,9 +66,10 @@ export const api = {
 
   reload: (id: string, options: ReloadOptions) => request<StateWithPage>(`${base(id)}/reload`, json(options)),
 
-  data: (id: string, page: number, size: number, sort: string | null, desc: boolean) => {
+  data: (id: string, page: number, size: number, sort: string | null, desc: boolean, view: GridView = {}) => {
     const query = new URLSearchParams({ page: String(page), size: String(size), desc: String(desc) });
     if (sort) query.set("sort", sort);
+    appendView(query, view);
     return request<Page>(`${base(id)}/data?${query}`);
   },
 
@@ -98,8 +112,16 @@ export const api = {
     }),
   clearChat: (id: string) => request<ChatState>(`${base(id)}/chat`, { method: "DELETE" }),
 
-  exportUrl: (id: string, format: string, encoding: string, delimiter: string) =>
-    `${base(id)}/export?${new URLSearchParams({ format, encoding, delimiter })}`,
+  /** With `view`, only what the grid shows (search, sort, visible columns) is exported. */
+  exportUrl: (id: string, format: string, encoding: string, delimiter: string, view?: GridView & { sort?: string | null; desc?: boolean }) => {
+    const query = new URLSearchParams({ format, encoding, delimiter });
+    if (view) {
+      appendView(query, view);
+      if (view.sort) query.set("sort", view.sort);
+      if (view.desc) query.set("desc", "true");
+    }
+    return `${base(id)}/export?${query}`;
+  },
 
   deleteSession: (id: string) => request<unknown>(base(id), { method: "DELETE" }),
 };

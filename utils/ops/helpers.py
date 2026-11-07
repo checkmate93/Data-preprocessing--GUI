@@ -410,8 +410,9 @@ def _condition_mask(df, column, op, value):
     if op == "notna":
         return series.notna()
     if op in ("contains", "not_contains", "startswith", "endswith"):
-        text = series.astype("string").str.lower()
-        needle = str(value).lower()
+        # case- and accent-insensitive, like the grid search: 'αθηνα' matches 'Αθήνα'
+        text = series.astype("string").str.lower().str.normalize("NFKD").str.replace(r"[̀-ͯ]", "", regex=True)
+        needle = strip_accents(str(value)).lower()
         if op == "startswith":
             mask = text.str.startswith(needle)
         elif op == "endswith":
@@ -872,7 +873,7 @@ if __name__ == "__main__":
     nums, _ = convert_numeric(renamed, ["poso"], decimal=",")
     assert nums["poso"].tolist()[:3] == [1234.5, 12.0, 7.0]
     std, rep = standardize_missing(renamed)
-    assert std["onoma_pelate"].isna().sum() == 2
+    assert std["onoma_pelati"].isna().sum() == 2
     filled, rep, skipped = smart_fill(nums)
     assert filled["poso"].isna().sum() == 0
     inferred, rep = auto_infer_types(renamed[["date"]], threshold=0.9)

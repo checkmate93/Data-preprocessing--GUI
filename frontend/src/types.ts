@@ -82,8 +82,9 @@ export interface Page extends FrameData {
   index: unknown[];
   page: number;
   size: number;
-  total_rows: number;
+  total_rows: number; // rows in the view (after search)
   total_pages: number;
+  all_rows?: number; // rows in the table
 }
 
 export type Section =

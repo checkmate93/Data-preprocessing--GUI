@@ -9,7 +9,8 @@ interface Props {
 
 export function Sidebar({ catalog, suggestions, onPick }: Props) {
   const [query, setQuery] = useState("");
-  const [closed, setClosed] = useState<Record<string, boolean>>({});
+  // Categories start closed; a click opens one. While searching, matching categories open by themselves.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   const byId = Object.fromEntries(catalog.operations.map((op) => [op.id, op]));
   const q = query.trim().toLowerCase();
   const matches = (op: Operation) =>
@@ -36,10 +37,11 @@ export function Sidebar({ catalog, suggestions, onPick }: Props) {
       {catalog.categories.filter((category) => !category.hidden).map((category) => {
         const ops = catalog.operations.filter((op) => op.category === category.id && matches(op));
         if (!ops.length) return null;
-        const isClosed = closed[category.id] && !q;
+        const isClosed = !open[category.id] && !q;
         return (
           <div key={category.id} className="category">
-            <button className="category-head" onClick={() => setClosed((c) => ({ ...c, [category.id]: !c[category.id] }))}>
+            <button className="category-head" aria-expanded={!isClosed}
+              onClick={() => setOpen((o) => ({ ...o, [category.id]: !o[category.id] }))}>
               <span>{isClosed ? "▸" : "▾"} {category.label}</span>
               <span className="muted small">{ops.length}</span>
             </button>

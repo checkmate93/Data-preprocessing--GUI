@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, Form, Header, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -43,7 +43,7 @@ from utils.file_detect import EXTENSIONS
 from utils.json_safe import df_page, to_jsonable
 from utils.ops.browser_python import staged_path
 from utils.op_registry import catalog
-from utils import session_store
+from utils import session_store, table_view
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("dataprep")
@@ -283,9 +283,18 @@ def delete_session(session_id: str):
 
 
 @app.get("/api/sessions/{session_id}/data")
-def get_data(session_id: str, page: int = 1, size: int = 50, sort: str | None = None, desc: bool = False):
-    shared = _session(session_id)["shared"]
-    page_data = df_page(session_store.hydrate(shared), page, size, sort, desc)
+def get_data(session_id: str, page: int = 1, size: int = 50, sort: str | None = None, desc: bool = False,
+             q: str = "", scope: str | None = None, hide: list[str] | None = Query(None)):
+    """One page of the view: search `q` (in all columns or in `scope`), sort, without the `hide` columns."""
+    session = _session(session_id)
+    shared = session["shared"]
+    df = session_store.hydrate(shared)
+    cache = session.setdefault("view_cache", table_view.ViewCache())
+    try:  # a bad scope column is the user's input, not a server error
+        positions = cache.positions_for(df, shared["current_version"], q, scope, sort, desc)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+    page_data = table_view.page_payload(df, positions, page, size, table_view.visible(df, hide))
     _trim_memory()
     return page_data
 
@@ -330,9 +339,13 @@ async def checkout(session_id: str, version: int):
 
 @app.get("/api/sessions/{session_id}/export")
 async def export(session_id: str, format: Literal["csv", "excel", "json", "parquet"] = "csv",
-                 encoding: str = "utf-8-sig", delimiter: str = ","):
+                 encoding: str = "utf-8-sig", delimiter: str = ",", q: str = "", scope: str | None = None,
+                 sort: str | None = None, desc: bool = False, hide: list[str] | None = Query(None)):
+    """The whole current version, or (with q/scope/sort/col) only what the grid shows."""
     session = _session(session_id)
-    result = await _run(session, create_export_flow(), {"format": format, "encoding": encoding, "delimiter": delimiter})
+    view = {"q": q, "scope": scope, "sort": sort, "desc": desc, "hide": hide} if (q.strip() or hide or sort) else None
+    result = await _run(session, create_export_flow(),
+                        {"format": format, "encoding": encoding, "delimiter": delimiter, "view": view})
     payload = result["payload"]
     return FileResponse(payload["path"], media_type=payload["media_type"], filename=payload["filename"])
 

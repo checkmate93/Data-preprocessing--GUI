@@ -205,6 +205,32 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 .table tbody tr:hover td { background: var(--primary-soft); }
 
 .grid-panel { display: flex; flex-direction: column; min-height: 300px; flex: 1; }
+.grid-toolbar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px;
+  background: var(--panel); border: 1px solid var(--border); border-bottom: 0; border-radius: var(--radius) var(--radius) 0 0;
+}
+.grid-toolbar + .table-wrap.grid { border-top-left-radius: 0; border-top-right-radius: 0; }
+.search-box { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 220px; border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; background: var(--panel); }
+.search-box:focus-within { outline: 2px solid var(--primary); outline-offset: 1px; }
+.search-box input { border: 0; flex: 1; padding: 6px 2px; outline: none; background: transparent; }
+.scope { display: flex; align-items: center; gap: 6px; }
+.scope select { max-width: 220px; }
+.table mark { background: #fde68a; color: inherit; border-radius: 2px; padding: 0 1px; }
+@media (prefers-color-scheme: dark) { .table mark { background: #7c5e10; } }
+.empty-row { text-align: center; color: var(--muted); padding: 24px !important; }
+.col-picker { position: relative; }
+.col-picker-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; width: 300px; max-height: 420px;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
+}
+.col-picker-tools { display: flex; gap: 12px; font-size: 12px; }
+.col-picker-list { overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.page-input { display: inline-flex; align-items: center; gap: 4px; }
+.page-input input { width: 54px; padding: 3px 6px; text-align: center; }
+.split-btn { display: inline-flex; }
+.split-btn .btn:first-child { border-radius: 6px 0 0 6px; border-right: 1px solid rgba(255, 255, 255, 0.35); }
+.split-btn .btn:last-child { border-radius: 0 6px 6px 0; }
 .table-wrap.grid { max-height: none; flex: 1; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .sortable { cursor: pointer; user-select: none; }
 .th-top { display: flex; gap: 6px; align-items: center; }

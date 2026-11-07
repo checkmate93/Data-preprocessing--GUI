@@ -3,12 +3,12 @@
  * Python panel. The tab manager keeps every Workspace mounted and only hides inactive ones, so all
  * of this state survives switching tabs.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, download, saveBlob, type ReloadOptions } from "../api";
 import { DELIMITER_LABEL, formatBytes } from "../format";
 import type { AssistantStatus, Catalog, ChatState, OpResult, Operation, Page, SessionState } from "../types";
 import { ChatPanel } from "./ChatPanel";
-import { DataGrid } from "./DataGrid";
+import { DataGrid, type Search } from "./DataGrid";
 import { ExportDialog, ReloadDialog, ScriptDialog, type ExportOptions } from "./Dialogs";
 import { HistoryPanel } from "./HistoryPanel";
 import { ParamDialog, hasParams } from "./ParamDialog";
@@ -37,16 +37,48 @@ interface Props {
 
 const EMPTY_CHAT: ChatState = { messages: [], usage: { input_tokens: 0, output_tokens: 0, calls: 0, last_input_tokens: 0 } };
 
+/** What the grid shows. View only: none of this changes the data. */
 interface View {
   page: number;
   size: number;
   sort: string | null;
   desc: boolean;
+  q: string;
+  scope: string | null;
 }
 
 type Modal = { kind: "export" } | { kind: "reload" } | { kind: "script"; script: string } | null;
 
-const FIRST_VIEW: View = { page: 1, size: 50, sort: null, desc: false };
+const FIRST_VIEW: View = { page: 1, size: 50, sort: null, desc: false, q: "", scope: null };
+const HIDDEN_KEY = (sessionId: string) => `dataprep.hidden.${sessionId}`;
+const NUMERIC_QUERY = /^\s*(>=|<=|>|<|=|!=)\s*(-?[\d.,]+)\s*$/;
+const RANGE_QUERY = /^\s*(-?[\d.,]+)\s*\.\.\s*(-?[\d.,]+)\s*$/;
+
+function readHidden(sessionId: string): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(HIDDEN_KEY(sessionId)) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+/** The grid search as «Φίλτρο γραμμών» conditions (same matching rules as the server search). */
+function searchToFilter(view: View, profile: SessionState["profile"]) {
+  const q = view.q.trim();
+  if (view.scope) {
+    const numeric = profile.columns[view.scope]?.kind === "numeric";
+    const compare = numeric ? NUMERIC_QUERY.exec(q) : null;
+    const range = numeric ? RANGE_QUERY.exec(q) : null;
+    const condition = compare
+      ? { column: view.scope, op: compare[1] === "=" ? "==" : compare[1], value: compare[2] }
+      : range
+        ? { column: view.scope, op: "between", value: `${range[1]},${range[2]}` }
+        : { column: view.scope, op: "contains", value: q };
+    return { conditions: [condition], combine: "and", mode: "keep" };
+  }
+  const conditions = Object.keys(profile.columns).map((column) => ({ column, op: "contains", value: q }));
+  return { conditions, combine: "or", mode: "keep" };
+}
 
 export function Workspace({ catalog, assistant, active, onMeta, restore }: Props) {
   // "pending" until the tab is first shown: inactive remembered tabs cost no memory and no requests.
@@ -87,7 +119,7 @@ export function Workspace({ catalog, assistant, active, onMeta, restore }: Props
           return;
         }
         const [firstPage, savedChat] = await Promise.all([
-          api.data(restore.sessionId, 1, FIRST_VIEW.size, null, false),
+          api.data(restore.sessionId, 1, FIRST_VIEW.size, null, false, { hide: readHidden(restore.sessionId) }),
           api.chat(restore.sessionId),
         ]);
         setSession(state);
@@ -119,10 +151,48 @@ export function Workspace({ catalog, assistant, active, onMeta, restore }: Props
     }
   }, []);
 
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
+  // Hidden columns: per tab, remembered per file (localStorage). A ref so loadPage always sees the latest.
+  const [hidden, setHiddenState] = useState<string[]>([]);
+  const hiddenRef = useRef<string[]>([]);
+  const currentSessionId = session?.session_id;
+  useEffect(() => {
+    if (!currentSessionId) return;
+    hiddenRef.current = readHidden(currentSessionId);
+    setHiddenState(hiddenRef.current);
+  }, [currentSessionId]);
+
+  // Responses can arrive out of order (fast typing in the search box): only the latest request may update the grid.
+  const pageRequest = useRef(0);
   const loadPage = useCallback(async (id: string, next: View) => {
+    const ticket = ++pageRequest.current;
     setView(next);
-    setPage(await api.data(id, next.page, next.size, next.sort, next.desc));
+    const fetchPage = (v: View) => api.data(id, v.page, v.size, v.sort, v.desc, { q: v.q, scope: v.scope, hide: hiddenRef.current });
+    let data: Page;
+    try {
+      data = await fetchPage(next);
+    } catch (error) {
+      if (!next.scope || ticket !== pageRequest.current) throw error;
+      // The searched column no longer exists (e.g. renamed by a step): search all columns instead.
+      const all = { ...next, scope: null, page: 1 };
+      setView(all);
+      data = await fetchPage(all);
+    }
+    if (ticket === pageRequest.current) setPage(data);
   }, []);
+
+  const setHidden = (id: string, next: string[]) => {
+    hiddenRef.current = next;
+    setHiddenState(next);
+    try {
+      localStorage.setItem(HIDDEN_KEY(id), JSON.stringify(next));
+    } catch {
+      /* storage blocked: the choice lasts until the tab is closed */
+    }
+    act("Φόρτωση…", () => loadPage(id, view));
+  };
 
   function applyState(next: SessionState & { result?: OpResult; page?: Page }) {
     const { result: _r, page: _p, ...state } = next;
@@ -197,11 +267,40 @@ export function Workspace({ catalog, assistant, active, onMeta, restore }: Props
       setModal(null);
     });
 
+  const viewActive = !!view.q.trim() || hidden.length > 0 || !!view.sort;
+  const searchState = useMemo(() => ({ q: view.q, scope: view.scope }), [view.q, view.scope]);
+  const sessionIdForSearch = session?.session_id;
+  const onSearch = useCallback(
+    (next: Search) => {
+      if (!sessionIdForSearch) return;
+      act("Αναζήτηση…", () => loadPage(sessionIdForSearch, { ...viewRef.current, q: next.q, scope: next.scope, page: 1 }));
+    },
+    [sessionIdForSearch, act, loadPage],
+  );
+
   const exportData = (options: ExportOptions) =>
     act("Εξαγωγή…", async () => {
       if (!session) return;
-      await download(api.exportUrl(session.session_id, options.format, options.encoding, options.delimiter), "export");
+      const gridView = options.onlyView ? { q: view.q, scope: view.scope, hide: hidden, sort: view.sort, desc: view.desc } : undefined;
+      await download(api.exportUrl(session.session_id, options.format, options.encoding, options.delimiter, gridView), "export");
       setModal(null);
+    });
+
+  const quickCsv = () =>
+    act("Λήψη CSV…", async () => {
+      if (!session) return;
+      await download(api.exportUrl(session.session_id, "csv", "utf-8-sig", ","), "export.csv");
+    });
+
+  const keepMatches = () =>
+    act("Φίλτρο γραμμών…", async () => {
+      if (!session) return;
+      const data = await api.op(session.session_id, "rows.filter", searchToFilter(view, session.profile), false);
+      applyState(data);
+      setResult(data.result);
+      // The rows now ARE the matches: clear the search so the grid shows the new version as it is.
+      await loadPage(session.session_id, { ...view, page: 1, q: "", scope: null });
+      setToast({ tone: "ok", text: data.result.message || "Έγινε" });
     });
 
   const showScript = () =>
@@ -318,7 +417,14 @@ export function Workspace({ catalog, assistant, active, onMeta, restore }: Props
           </button>
           <button className="btn" onClick={() => setModal({ kind: "reload" })}>Ξαναδιάβασε</button>
           <button className="btn" onClick={showScript}>Κώδικας</button>
-          <button className="btn primary" onClick={() => setModal({ kind: "export" })}>Εξαγωγή</button>
+          <span className="split-btn">
+            <button className="btn primary" onClick={quickCsv} title="Κατέβασε αμέσως ολόκληρο τον καθαρό πίνακα (CSV, UTF-8, σωστά ελληνικά στο Excel)">
+              ⬇ CSV
+            </button>
+            <button className="btn primary" onClick={() => setModal({ kind: "export" })} title="Άλλη μορφή, encoding ή μόνο ό,τι φαίνεται">
+              Εξαγωγή…
+            </button>
+          </span>
           <button className="btn ghost" onClick={newFile}>Νέο αρχείο</button>
         </div>
       </header>
@@ -343,6 +449,11 @@ export function Workspace({ catalog, assistant, active, onMeta, restore }: Props
           profile={profile}
           sort={view.sort}
           desc={view.desc}
+          search={searchState}
+          hidden={hidden}
+          onSearch={onSearch}
+          onHidden={(next) => setHidden(session.session_id, next)}
+          onKeepMatches={keepMatches}
           onSort={sortBy}
           onPage={(n) => act("Φόρτωση…", () => loadPage(session.session_id, { ...view, page: n }))}
           onSize={(n) => act("Φόρτωση…", () => loadPage(session.session_id, { ...view, size: n, page: 1 }))}
@@ -399,7 +510,14 @@ export function Workspace({ catalog, assistant, active, onMeta, restore }: Props
           onClose={() => setChatOpen(false)}
         />
       )}
-      {modal?.kind === "export" &&<ExportDialog onClose={() => setModal(null)} onExport={exportData} />}
+      {modal?.kind === "export" && (
+        <ExportDialog
+          viewActive={viewActive}
+          viewSummary={`${page.total_rows} γραμμές × ${page.columns.length} στήλες`}
+          onClose={() => setModal(null)}
+          onExport={exportData}
+        />
+      )}
       {modal?.kind === "reload" && <ReloadDialog source={source} onClose={() => setModal(null)} onReload={reload} />}
       {modal?.kind === "script" && (
         <ScriptDialog

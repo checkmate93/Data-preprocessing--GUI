@@ -8,10 +8,18 @@ export interface ExportOptions {
   format: string;
   encoding: string;
   delimiter: string;
+  onlyView: boolean; // only the rows/columns the grid shows (search, hidden columns, sort)
 }
 
-export function ExportDialog({ onClose, onExport }: { onClose: () => void; onExport: (o: ExportOptions) => void }) {
-  const [options, setOptions] = useState<ExportOptions>({ format: "csv", encoding: "utf-8-sig", delimiter: "," });
+interface ExportProps {
+  viewActive: boolean;
+  viewSummary: string;
+  onClose: () => void;
+  onExport: (o: ExportOptions) => void;
+}
+
+export function ExportDialog({ viewActive, viewSummary, onClose, onExport }: ExportProps) {
+  const [options, setOptions] = useState<ExportOptions>({ format: "csv", encoding: "utf-8-sig", delimiter: ",", onlyView: false });
   const set = (patch: Partial<ExportOptions>) => setOptions((o) => ({ ...o, ...patch }));
   return (
     <Modal
@@ -25,6 +33,19 @@ export function ExportDialog({ onClose, onExport }: { onClose: () => void; onExp
       }
     >
       <div className="form">
+        {viewActive && (
+          <fieldset>
+            <legend>Τι να εξαχθεί</legend>
+            <label className="check">
+              <input type="radio" checked={!options.onlyView} onChange={() => set({ onlyView: false })} />
+              Ολόκληρος ο πίνακας (τρέχουσα έκδοση)
+            </label>
+            <label className="check">
+              <input type="radio" checked={options.onlyView} onChange={() => set({ onlyView: true })} />
+              Μόνο ό,τι φαίνεται: {viewSummary} (αναζήτηση, ορατές στήλες, ταξινόμηση)
+            </label>
+          </fieldset>
+        )}
         <label>
           <span>Μορφή</span>
           <select value={options.format} onChange={(e) => set({ format: e.target.value })}>

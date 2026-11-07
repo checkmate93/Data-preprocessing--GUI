@@ -34,6 +34,7 @@ from utils.json_safe import df_page, to_jsonable
 from utils.op_registry import get_op, render_code
 from utils.profile import build_profile
 from utils.suggest import suggest_operations
+from utils.table_view import apply_view, visible
 from utils.version_store import delete_versions, load_version, save_version
 
 logger = logging.getLogger(__name__)
@@ -419,6 +420,10 @@ class WriteExportNode(Node):
 
     def exec(self, inputs):
         df, request, storage_dir, stem = inputs
+        view = request.get("view")
+        if view:  # only what the grid shows: search + sort + visible columns
+            df = apply_view(df, view.get("q", ""), view.get("scope"), view.get("sort"), view.get("desc"), visible(df, view.get("hide")))
+            stem += "_view"
         return write_any(
             df, request.get("format", "csv"), f"{storage_dir}/exports", stem,
             encoding=request.get("encoding") or "utf-8-sig", delimiter=request.get("delimiter") or ",",
